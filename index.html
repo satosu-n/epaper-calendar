@@ -154,7 +154,7 @@ async function fetchRange(a,b){
   Object.assign(HOL,j.h);Object.assign(HOL_LIVE,j.h);
   for(let m=new Date(a.getFullYear(),a.getMonth(),1);m<=b;m=new Date(m.getFullYear(),m.getMonth()+1,1))loaded.add(monthKey(m));
   saveCache();
-  return j.at;
+  return j;
 }
 let loading=false;
 async function ensure(force){
@@ -164,8 +164,10 @@ async function ensure(force){
   if(!need.length)return;
   loading=true;
   try{
-    const at=await fetchRange(need[0],new Date(need[need.length-1].getFullYear(),need[need.length-1].getMonth()+1,0));
-    MSG=`Googleカレンダー ${at} 更新（メモ・ゴミの日はサンプル）`;
+    const j=await fetchRange(need[0],new Date(need[need.length-1].getFullYear(),need[need.length-1].getMonth()+1,0));
+    MSG=(j.w?`注意：合言葉の違うアクセスが24時間で${j.w}件あります ・ `:'')
+      +`Googleカレンダー ${j.at} 更新（メモ・ゴミの日はサンプル）`;
+    $('msg').style.color=j.w?'#fff':'';$('msg').style.fontWeight=j.w?'700':'';
   }catch(e){
     MSG='更新できませんでした。前回のデータを表示しています';
   }
