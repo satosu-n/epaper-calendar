@@ -4,6 +4,10 @@
  * 設定はすべて「プロジェクトの設定」→「スクリプト プロパティ」に置く（このファイルには書かない）
  *   TOKEN         … 合言葉。setup() が自動で作る
  *   CALENDAR_IDS  … 表示するカレンダーのID。複数ならカンマ区切り。空なら祝日・誕生日以外の全カレンダー
+ *   TASKLIST_IDS  … メモ欄に出すToDoリストのID。複数ならカンマ区切り。空ならすべてのリスト
+ *   ALERT_TO      … 不審なアクセスの通知先メールアドレス。空ならこのスクリプトの持ち主
+ *
+ * 事前に、エディタ左の「サービス」の＋から「Tasks API」を追加しておくこと（メモ欄用）
  *
  * 初回
  *  1. このコードを貼り付けて保存し、関数「setup」を実行（権限の許可が必要）→ ログに合言葉が出る
@@ -59,7 +63,26 @@ function doGet(e) {
       });
     }
   }
-  return json_({ ev: ev, h: h, at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props) });
+  return json_({ ev: ev, h: h, m: memo_(props), at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props) });
+}
+
+// メモ欄：Google ToDoの未完了タスク。期限が近い順（期限なしは後ろ）
+function memo_(props) {
+  if (typeof Tasks === 'undefined') return null; // Tasks API が未追加
+  try {
+    let ids = (props.getProperty('TASKLIST_IDS') || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!ids.length) ids = (Tasks.Tasklists.list({ maxResults: 100 }).items || []).map(l => l.id);
+    const out = [];
+    ids.forEach(id => {
+      (Tasks.Tasks.list(id, { showCompleted: false, showHidden: false, maxResults: 100 }).items || [])
+        .forEach(t => { if (t.title) out.push({ t: t.title, due: t.due ? t.due.slice(0, 10) : '', p: t.position || '' }); });
+    });
+    out.sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : (a.p < b.p ? -1 : 1));
+    return out.slice(0, 50).map(x => ({ t: x.t, due: x.due }));
+  } catch (err) {
+    console.error('ToDoを読めませんでした: ' + err);
+    return null;
+  }
 }
 
 function calendars_(props) {
@@ -136,12 +159,14 @@ function setup() {
     token = Utilities.getUuid().replace(/-/g, '');
     props.setProperty('TOKEN', token);
   }
-  if (props.getProperty('CALENDAR_IDS') === null) props.setProperty('CALENDAR_IDS', '');
+  ['CALENDAR_IDS', 'TASKLIST_IDS', 'ALERT_TO'].forEach(k => { if (props.getProperty(k) === null) props.setProperty(k, ''); });
   CalendarApp.getAllCalendars();            // カレンダーの権限の確認用
   MailApp.getRemainingDailyQuota();         // メール送信の権限の確認用
   Logger.log('合言葉: ' + token);
   Logger.log('通知の送り先: ' + alertTo_());
   Logger.log('表示するカレンダー: ' + (props.getProperty('CALENDAR_IDS') || '（全カレンダー）'));
+  const m = memo_(props);
+  Logger.log(m === null ? 'メモ欄：Tasks API が追加されていないか、読めませんでした' : 'メモ欄：未完了のタスク ' + m.length + ' 件');
   Logger.log('iPad用URL: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
 }
 
@@ -162,6 +187,10 @@ function testAlert() {
 
 function listCalendars() {
   CalendarApp.getAllCalendars().forEach(c => Logger.log(c.getName() + '  →  ' + c.getId()));
+}
+
+function listTaskLists() {
+  (Tasks.Tasklists.list({ maxResults: 100 }).items || []).forEach(l => Logger.log(l.title + '  →  ' + l.id));
 }
 
 function parse_(s) {
