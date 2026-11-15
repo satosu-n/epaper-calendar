@@ -45,7 +45,6 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .c.today{box-shadow:inset 0 0 0 8px #000}
 .c.today .dt{padding-left:4px}
 .dt{display:flex;align-items:center;gap:8px;height:52px;white-space:nowrap;overflow:hidden}
-.tg .dt{padding-right:62px}
 .n{flex:none;font-size:40px;font-weight:800;line-height:44px;padding:0 6px;border-radius:6px}
 .hol .n{background:#000;color:#fff}
 .sat .n{border-bottom:5px solid #000;border-radius:0;line-height:40px}
@@ -53,8 +52,6 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .out .n,.out .hn{color:#9a9a9a}
 .out.hol .n{background:#9a9a9a;color:#fff}
 .out.sat .n{border-color:#9a9a9a}
-.tag{position:absolute;top:12px;right:12px;font-size:19px;font-weight:700;border:2px solid #000;padding:0 6px;line-height:26px;background:#fff}
-.out .tag{border-color:#9a9a9a;color:#9a9a9a}
 .ev{font-size:24px;line-height:31px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ev b{font-weight:700;margin-right:6px}
 .ev.ad{font-weight:700}
@@ -63,6 +60,25 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .band{position:absolute;height:32px;background:#c4c4c4;font-size:22px;line-height:32px;padding:0 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700}
 .band.s{border-top-left-radius:16px;border-bottom-left-radius:16px}
 .band.e{border-top-right-radius:16px;border-bottom-right-radius:16px}
+.c.sel{background:#d6d6d6}
+.c.sel.today{box-shadow:inset 0 0 0 8px #000}
+.details{display:grid;grid-template-columns:1fr 1fr;gap:24px;min-height:0}
+.dbox{border:3px solid #000;border-radius:10px;padding:10px 16px;overflow:hidden;min-height:0}
+.dbox.today{border-width:8px}
+.dh{display:flex;align-items:center;gap:12px;height:56px;border-bottom:2px solid #000;margin-bottom:10px;white-space:nowrap}
+.dn{font-size:36px;font-weight:800;padding:0 8px;border-radius:6px}
+.dh.hol .dn{background:#000;color:#fff}
+.dh.sat .dn{border-bottom:5px solid #000;border-radius:0}
+.dhn{font-size:24px;font-weight:700}
+.dl{margin-left:auto;font-size:22px;font-weight:700;color:#555}
+.dbox ul{list-style:none;font-size:30px;line-height:42px}
+.dbox ul.two{columns:2;column-gap:24px}
+.dbox li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;break-inside:avoid}
+.dbox li b{margin-right:10px}
+.dbox li.ad{font-weight:700}
+.dbox li.pb{background:#c4c4c4;border-radius:21px;padding:0 16px;font-weight:700;margin-bottom:4px}
+.dbox li.more{font-weight:800}
+.dbox li.none{color:#777}
 .memo{height:190px;flex:none;border-top:4px solid #000;padding-top:14px;display:flex;gap:32px}
 .memo h4{font-size:30px;font-weight:800;flex:none}
 .memo ul{list-style:none;columns:2;column-gap:48px;font-size:27px;line-height:40px;flex:1}
@@ -157,16 +173,20 @@ async function fetchRange(a,b){
   return j;
 }
 let loading=false;
+// 表示中の範囲（前後1か月を含む）を取得する
 async function ensure(force){
   if(!cfg||loading)return;
-  const ms=[-1,0,1].map(i=>new Date(view.getFullYear(),view.getMonth()+i,1));
+  const [a,b]=range();
+  const ms=[];
+  for(let m=new Date(a.getFullYear(),a.getMonth()-1,1);m<=new Date(b.getFullYear(),b.getMonth()+1,1);m=new Date(m.getFullYear(),m.getMonth()+1,1))ms.push(m);
   const need=force?ms:ms.filter(m=>!loaded.has(monthKey(m)));
   if(!need.length)return;
   loading=true;
   try{
-    const j=await fetchRange(need[0],new Date(need[need.length-1].getFullYear(),need[need.length-1].getMonth()+1,0));
+    const last=need[need.length-1];
+    const j=await fetchRange(need[0],new Date(last.getFullYear(),last.getMonth()+1,0));
     MSG=(j.w?`注意：合言葉の違うアクセスが24時間で${j.w}件あります ・ `:'')
-      +`Googleカレンダー ${j.at} 更新（メモ・ゴミの日はサンプル）`;
+      +`Googleカレンダー ${j.at} 更新（メモはサンプル）`;
     $('msg').style.color=j.w?'#fff':'';$('msg').style.fontWeight=j.w?'700':'';
   }catch(e){
     MSG='更新できませんでした。前回のデータを表示しています';
@@ -196,9 +216,24 @@ if(cfg){
   indexEvents();MSG='Googleカレンダーから読み込み中…';
 }else sample();
 
-// ゴミの日（サンプル：燃えるゴミ＝火・金、不燃＝第2・第4水曜）
-const garb=d=>{const w=d.getDay();if(w===2||w===5)return'ゴミ';
-  if(w===3){const n=Math.ceil(d.getDate()/7);if(n===2||n===4)return'不燃'}return''};
+// ---- 表示の状態 ----
+// mode: 'm'=月、'w3'=3週、'w2'=2週＋詳細。ws=週の始まり（日曜）、sel=選んだ日
+const MODES=['m','w3','w2'],MODE_NAME={m:'月',w3:'3週',w2:'2週＋詳細'};
+const sunday=d=>addD(d,-d.getDay());
+let mode='m',ws=sunday(T),sel=T;
+function range(){
+  if(mode==='m'){const f=view,s=sunday(f),l=new Date(f.getFullYear(),f.getMonth()+1,0);return [s,addD(l,6-l.getDay())]}
+  if(mode==='w3')return [ws,addD(ws,20)];
+  return [ws,addD(ws,14)]; // 詳細枠の「次の日」が範囲の外になる場合も含める
+}
+function goHome(){
+  T=today();view=new Date(T.getFullYear(),T.getMonth(),1);ws=sunday(T);sel=T;
+}
+function isHome(){
+  if(mode==='m')return +view===+new Date(T.getFullYear(),T.getMonth(),1);
+  if(mode==='w3')return +ws===+sunday(T);
+  return +ws===+sunday(T)&&+sel===+T;
+}
 
 function mini(y,mo){
   const f=new Date(y,mo,1),dim=new Date(y,mo+1,0).getDate();
@@ -207,50 +242,85 @@ function mini(y,mo){
     h+=`<span class="${w===0||HOL[key(dt)]?'sun':w===6?'sat':''}">${d}</span>`}
   return `<div class="mini"><h3>${mo+1}月</h3><div class="g">${h}</div></div>`;
 }
+const md=d=>`${d.getMonth()+1}月${d.getDate()}日（${DOW[d.getDay()]}）`;
+
+// 1週分の行。mo=月表示のときの当月（それ以外の日は薄く）、null なら薄くしない
+function weekRow(w0,rowH,mo){
+  const we=addD(w0,6);
+  // 期間の予定：この週にかかる部分を帯にして、重ならないよう段に分ける
+  const segs=BANDS.filter(b=>b.s<=we&&b.e>=w0)
+    .map(b=>({b,a:b.s<w0?w0:b.s,z:b.e>we?we:b.e}))
+    .sort((p,q)=>p.a-q.a||q.z-p.z);
+  const lanes=[];
+  segs.forEach(g=>{let l=lanes.findIndex(end=>end<g.a);if(l<0){l=lanes.length;lanes.push(g.z)}else lanes[l]=g.z;g.l=l});
+  const nl=lanes.length,cap=Math.max(1,Math.floor((rowH-2-DATE_H-nl*LANE-8)/LINE));
+  let cells='';
+  for(let c=0;c<7;c++){
+    const d=addD(w0,c),k=key(d),hn=HOL[k],w=d.getDay(),cls=['c'];
+    if(mo!==null&&d.getMonth()!==mo)cls.push('out');
+    if(w===0||hn)cls.push('hol');else if(w===6)cls.push('sat');
+    if(+d===+T)cls.push('today');
+    if(mode==='w2'&&+d===+sel)cls.push('sel');
+    // 並び順：終日の予定が先、その後に時刻順
+    const evs=(SINGLE[k]||[]).slice().sort((a,b)=>tm(a.time)-tm(b.time));
+    let list=evs,more=0;
+    if(evs.length>cap){list=evs.slice(0,cap-1);more=evs.length-list.length}
+    const num=(mo===null&&d.getDate()===1)?`${d.getMonth()+1}/1`:d.getDate();
+    cells+=`<div class="${cls.join(' ')}" data-d="${k}"><div class="dt"><span class="n">${num}</span>${hn?`<span class="hn">${hn}</span>`:''}</div>`
+      +list.map(e=>e.time?`<div class="ev"><b>${e.time}</b>${e.title}</div>`:`<div class="ev ad">${e.title}</div>`).join('')
+      +(more?`<div class="more">+${more}件</div>`:'')+'</div>';
+  }
+  const bands=segs.map(g=>{
+    const c0=dayDiff(w0,g.a),span=dayDiff(g.a,g.z)+1,st=+g.a===+g.b.s,en=+g.z===+g.b.e;
+    return `<div class="band${st?' s':''}${en?' e':''}" style="left:calc(${c0}*100%/7 + 6px);width:calc(${span}*100%/7 - 12px);bottom:${6+(nl-1-g.l)*LANE}px">${st?'':'… '}${g.b.t}</div>`;
+  }).join('');
+  return `<div class="wk">${cells}${bands}</div>`;
+}
+
+// 詳細枠（選んだ日・次の日）
+const DL=42,DHEAD=70;
+function detail(d,label,h){
+  const k=key(d),hn=HOL[k];
+  const items=BANDS.filter(b=>b.s<=d&&b.e>=d).map(b=>`<li class="pb">${b.t}</li>`)
+    .concat((SINGLE[k]||[]).slice().sort((a,b)=>tm(a.time)-tm(b.time))
+      .map(e=>e.time?`<li><b>${e.time}</b>${e.title}</li>`:`<li class="ad">${e.title}</li>`));
+  const cap=Math.max(1,Math.floor((h-DHEAD-20)/DL));
+  let list=items,two=false,more='';
+  if(items.length>cap){two=true;if(items.length>cap*2){list=items.slice(0,cap*2-1);more=`<li class="more">ほか${items.length-list.length}件</li>`}}
+  const w=d.getDay(),cls=(w===0||hn)?'hol':w===6?'sat':'';
+  return `<div class="dbox${+d===+T?' today':''}"><div class="dh ${cls}"><span class="dn">${md(d)}</span>${hn?`<span class="dhn">${hn}</span>`:''}<span class="dl">${label}</span></div>`
+    +`<ul class="${two?'two':''}">${list.join('')}${more}${items.length?'':'<li class="none">予定なし</li>'}</ul></div>`;
+}
 
 function render(){
-  const y=view.getFullYear(),mo=view.getMonth();
+  const g=$('grid');
+  // 見出し：表示している範囲の月
+  const [a,b]=range();
+  const base=mode==='m'?view:(mode==='w2'?sel:ws);
+  const y=base.getFullYear(),mo=base.getMonth();
   $('y').textContent=y+'年';
   $('m').innerHTML=(mo+1)+'<small>月</small>';
-  $('td').textContent=`今日 ${T.getMonth()+1}月${T.getDate()}日（${DOW[T.getDay()]}）`;
+  const span=mode==='m'?'':`${MODE_NAME[mode]}：${a.getMonth()+1}/${a.getDate()}〜${addD(ws,mode==='w3'?20:13).getMonth()+1}/${addD(ws,mode==='w3'?20:13).getDate()}　`;
+  $('td').textContent=`${span}今日 ${md(T)}`;
   const p=new Date(y,mo-1,1),n=new Date(y,mo+1,1);
   $('minis').innerHTML=mini(p.getFullYear(),p.getMonth())+mini(n.getFullYear(),n.getMonth());
-  const first=new Date(y,mo,1),start=addD(first,-first.getDay()),dim=new Date(y,mo+1,0).getDate();
-  const rows=Math.ceil((first.getDay()+dim)/7),rowH=GRID_H/rows;
-  $('grid').style.gridTemplateRows=`repeat(${rows},minmax(0,1fr))`;
   let html='';
-  for(let r=0;r<rows;r++){
-    const ws=addD(start,r*7),we=addD(ws,6);
-    // 期間の予定：この週にかかる部分を帯にして、重ならないよう段に分ける
-    const segs=BANDS.filter(b=>b.s<=we&&b.e>=ws)
-      .map(b=>({b,a:b.s<ws?ws:b.s,z:b.e>we?we:b.e}))
-      .sort((p,q)=>p.a-q.a||q.z-p.z);
-    const lanes=[];
-    segs.forEach(g=>{let l=lanes.findIndex(end=>end<g.a);if(l<0){l=lanes.length;lanes.push(g.z)}else lanes[l]=g.z;g.l=l});
-    const nl=lanes.length,cap=Math.max(1,Math.floor((rowH-2-DATE_H-nl*LANE-8)/LINE));
-    let cells='';
-    for(let c=0;c<7;c++){
-      const d=addD(ws,c),k=key(d),hn=HOL[k],w=d.getDay(),g=garb(d),cls=['c'];
-      if(d.getMonth()!==mo)cls.push('out');
-      if(w===0||hn)cls.push('hol');else if(w===6)cls.push('sat');
-      if(+d===+T)cls.push('today');
-      if(g)cls.push('tg');
-      // 並び順：終日の予定が先、その後に時刻順
-      const evs=(SINGLE[k]||[]).slice().sort((a,b)=>tm(a.time)-tm(b.time));
-      let list=evs,more=0;
-      if(evs.length>cap){list=evs.slice(0,cap-1);more=evs.length-list.length}
-      cells+=`<div class="${cls.join(' ')}"><div class="dt"><span class="n">${d.getDate()}</span>${hn?`<span class="hn">${hn}</span>`:''}</div>`
-        +(g?`<span class="tag">${g}</span>`:'')
-        +list.map(e=>e.time?`<div class="ev"><b>${e.time}</b>${e.title}</div>`:`<div class="ev ad">${e.title}</div>`).join('')
-        +(more?`<div class="more">+${more}件</div>`:'')+'</div>';
-    }
-    const bands=segs.map(g=>{
-      const c0=dayDiff(ws,g.a),span=dayDiff(g.a,g.z)+1,st=+g.a===+g.b.s,en=+g.z===+g.b.e;
-      return `<div class="band${st?' s':''}${en?' e':''}" style="left:calc(${c0}*100%/7 + 6px);width:calc(${span}*100%/7 - 12px);bottom:${6+(nl-1-g.l)*LANE}px">${st?'':'… '}${g.b.t}</div>`;
-    }).join('');
-    html+=`<div class="wk">${cells}${bands}</div>`;
+  if(mode==='m'){
+    const first=view,start=sunday(first),dim=new Date(first.getFullYear(),first.getMonth()+1,0).getDate();
+    const rows=Math.ceil((first.getDay()+dim)/7),rowH=GRID_H/rows;
+    g.style.gridTemplateRows=`repeat(${rows},minmax(0,1fr))`;
+    for(let r=0;r<rows;r++)html+=weekRow(addD(start,r*7),rowH,first.getMonth());
+  }else if(mode==='w3'){
+    const rowH=GRID_H/3;
+    g.style.gridTemplateRows='repeat(3,minmax(0,1fr))';
+    for(let r=0;r<3;r++)html+=weekRow(addD(ws,r*7),rowH,null);
+  }else{
+    const rowH=GRID_H/3,dh=GRID_H-rowH*2-GAP;
+    g.style.gridTemplateRows=`${rowH}px ${rowH}px ${GAP}px minmax(0,1fr)`;
+    html=weekRow(ws,rowH,null)+weekRow(addD(ws,7),rowH,null)+'<div></div>'
+      +`<div class="details">${detail(sel,'選んだ日',dh)}${detail(addD(sel,1),'次の日',dh)}</div>`;
   }
-  $('grid').innerHTML=html;
+  g.innerHTML=html;
 }
 
 // 電子ペーパーの書き換えを再現：黒→白→新しい画面（合計約0.65秒）
@@ -260,24 +330,49 @@ function refresh(fn){
   setTimeout(()=>{fn();render();f.style.background='#fff';ensure()},200);
   setTimeout(()=>{f.style.display='none';busy=false},650);
 }
-const thisMonth=()=>new Date(T.getFullYear(),T.getMonth(),1);
-const isThisMonth=()=>+view===+thisMonth();
 function touched(){
   clearTimeout(idle);
-  // 3分操作がなければ今月に戻る
-  idle=setTimeout(()=>{if(!isThisMonth())refresh(()=>{view=thisMonth()})},180000);
+  // 3分操作がなければ今日に戻る（表示の種類はそのまま）
+  idle=setTimeout(()=>{T=today();if(!isHome())refresh(goHome)},180000);
 }
 function say(t){
   clearTimeout(msgTimer);$('msg').textContent=t;
   msgTimer=setTimeout(()=>{$('msg').textContent=MSG},2500);
 }
-$('bPrev').addEventListener('click',()=>{touched();refresh(()=>{view=new Date(view.getFullYear(),view.getMonth()-1,1)})});
-$('bNext').addEventListener('click',()=>{touched();refresh(()=>{view=new Date(view.getFullYear(),view.getMonth()+1,1)})});
-$('bToday').addEventListener('click',()=>{touched();refresh(()=>{T=today();view=thisMonth()})});
-$('bView').addEventListener('click',()=>{touched();say('3週・2週＋詳細の表示は次の版で追加します')});
+function step(dir){
+  if(mode==='m')view=new Date(view.getFullYear(),view.getMonth()+dir,1);
+  else if(mode==='w3')ws=addD(ws,7*dir);
+  else{
+    // 2週＋詳細：選んだ日を1日ずつ動かし、2週の端を超えたら1週送る
+    sel=addD(sel,dir);
+    if(sel<ws)ws=addD(ws,-7);
+    if(sel>addD(ws,13))ws=addD(ws,7);
+  }
+}
+function nextMode(){
+  const nm=MODES[(MODES.indexOf(mode)+1)%MODES.length];
+  if(nm==='w3'){ // 月→3週：今月なら今週から、それ以外はその月の1日の週から
+    ws=+view===+new Date(T.getFullYear(),T.getMonth(),1)?sunday(T):sunday(view);
+  }else if(nm==='w2'){ // 3週→2週＋詳細：今日が範囲内なら今日を選ぶ
+    sel=(T>=ws&&T<=addD(ws,13))?T:ws;
+  }else{ // 2週＋詳細→月：選んでいた日の月
+    view=new Date(sel.getFullYear(),sel.getMonth(),1);
+  }
+  mode=nm;
+}
+$('bPrev').addEventListener('click',()=>{touched();refresh(()=>step(-1))});
+$('bNext').addEventListener('click',()=>{touched();refresh(()=>step(1))});
+$('bToday').addEventListener('click',()=>{touched();refresh(goHome)});
+$('bView').addEventListener('click',()=>{touched();refresh(nextMode);say(`表示：${MODE_NAME[MODES[(MODES.indexOf(mode)+1)%3]]}`)});
+// マスをタップ：2週＋詳細ではその日を選ぶ。月・3週ではその日を選んで2週＋詳細へ
+$('grid').addEventListener('click',e=>{
+  const c=e.target.closest('.c');if(!c)return;
+  const d=parseKey(c.dataset.d);touched();
+  refresh(()=>{sel=d;ws=sunday(d);if(sel>addD(ws,13))ws=addD(ws,7);mode='w2'});
+});
 
 // 日付が変わったら描き直す
-setInterval(()=>{const t=today();if(+t!==+T){const was=isThisMonth();T=t;if(was)view=thisMonth();render()}},60000);
+setInterval(()=>{const t=today();if(+t!==+T){const home=isHome();T=t;if(home)goHome();render()}},60000);
 
 function fit(){
   const bar=$('bar'),msg=$('msg'),wrap=$('wrap');
@@ -288,7 +383,7 @@ function fit(){
   bar.style.width=msg.style.width=W*s+'px';
 }
 addEventListener('resize',fit);
-// 10分ごとに表示中の前後の月を取り直す
+// 10分ごとに表示中の範囲を取り直す
 setInterval(()=>ensure(true),600000);
 $('msg').textContent=MSG;
 fit();render();ensure();
