@@ -95,19 +95,32 @@ function recordFailure_(props) {
     props.setProperty('FAIL_LOG', JSON.stringify(log.slice(-200)));
     const last = +(props.getProperty('FAIL_MAILED') || 0);
     if (now - last >= ALERT_INTERVAL_MIN * 60000) {
-      props.setProperty('FAIL_MAILED', String(now));
-      MailApp.sendEmail(Session.getEffectiveUser().getEmail(),
-        '【電子ペーパーカレンダー】合言葉の違うアクセスがありました',
-        '直近24時間で ' + log.length + ' 件、合言葉の違うアクセスがありました（最新：' +
-        fmt_(new Date(now), 'M月d日 H:mm') + '）。\n\n' +
-        '心当たりがない場合は、Apps Scriptで次のどちらかを行ってください。\n' +
-        '・すぐ止める：「デプロイ」→「デプロイを管理」で今のデプロイをアーカイブ\n' +
-        '・合言葉を変える：関数「resetToken」を実行し、iPad用URLを作り直す\n\n' +
-        '（この通知は多くても' + ALERT_INTERVAL_MIN + '分に1通です）');
+      try {
+        sendAlert_(log.length, now);
+        props.setProperty('FAIL_MAILED', String(now)); // 送れたときだけ間隔をあける
+      } catch (err) {
+        console.error('通知メールを送れませんでした: ' + err);
+      }
     }
   } finally {
     lock.releaseLock();
   }
+}
+
+function sendAlert_(count, now) {
+  MailApp.sendEmail(alertTo_(),
+    '【電子ペーパーカレンダー】合言葉の違うアクセスがありました',
+    '直近24時間で ' + count + ' 件、合言葉の違うアクセスがありました（最新：' +
+    fmt_(new Date(now), 'M月d日 H:mm') + '）。\n\n' +
+    '心当たりがない場合は、Apps Scriptで次のどちらかを行ってください。\n' +
+    '・すぐ止める：「デプロイ」→「デプロイを管理」で今のデプロイをアーカイブ\n' +
+    '・合言葉を変える：関数「resetToken」を実行し、iPad用URLを作り直す\n\n' +
+    '（この通知は多くても' + ALERT_INTERVAL_MIN + '分に1通です）');
+}
+
+// 送り先：スクリプト プロパティ ALERT_TO があればそこへ、なければこのスクリプトの持ち主
+function alertTo_() {
+  return PropertiesService.getScriptProperties().getProperty('ALERT_TO') || Session.getEffectiveUser().getEmail();
 }
 
 function recentFailures_(props) {
@@ -127,7 +140,7 @@ function setup() {
   CalendarApp.getAllCalendars();            // カレンダーの権限の確認用
   MailApp.getRemainingDailyQuota();         // メール送信の権限の確認用
   Logger.log('合言葉: ' + token);
-  Logger.log('通知の送り先: ' + Session.getEffectiveUser().getEmail());
+  Logger.log('通知の送り先: ' + alertTo_());
   Logger.log('表示するカレンダー: ' + (props.getProperty('CALENDAR_IDS') || '（全カレンダー）'));
   Logger.log('iPad用URL: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
 }
@@ -139,6 +152,12 @@ function resetToken() {
   props.deleteProperty('FAIL_LOG');
   Logger.log('新しい合言葉: ' + token);
   Logger.log('iPad用URLを作り直してください: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
+}
+
+// 通知メールのテスト：実行するとすぐに1通送る
+function testAlert() {
+  sendAlert_(0, Date.now());
+  Logger.log('テストメールを送りました: ' + alertTo_() + '（残り送信可能数: ' + MailApp.getRemainingDailyQuota() + '）');
 }
 
 function listCalendars() {
