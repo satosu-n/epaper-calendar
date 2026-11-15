@@ -98,7 +98,7 @@ const W=1650,H=2200,PAD=44,HEAD=300,WDH=64,MEMO=190,GAP=14;
 const GRID_H=H-PAD*2-HEAD-WDH-MEMO-GAP*3;
 const LINE=31,DATE_H=58,LANE=35;
 const DOW='日月火水木金土';
-const MSG='予定とメモはサンプルです（試作版）';
+let MSG='予定とメモはサンプルです（試作版）';
 // 祝日（試作用。本番はGoogleの「日本の祝日」カレンダーから取得）
 const HOL={
 '2026-01-01':'元日','2026-01-12':'成人の日','2026-02-11':'建国記念の日','2026-02-23':'天皇誕生日','2026-03-20':'春分の日',
@@ -119,9 +119,62 @@ const dayDiff=(a,b)=>Math.round((b-a)/864e5);
 
 let T=today(),view=new Date(T.getFullYear(),T.getMonth(),1),busy=false,idle=null,msgTimer=null;
 
-// ---- サンプルの予定（今日を基準に作る） ----
-const SINGLE={},BANDS=[];
+let SINGLE={},BANDS=[];
 const addE=(d,time,title)=>{const k=key(d);(SINGLE[k]=SINGLE[k]||[]).push({time,title})};
+const parseKey=s=>new Date(+s.slice(0,4),+s.slice(5,7)-1,+s.slice(8,10));
+
+// ---- Googleカレンダー連携（Apps Script） ----
+// 接続先はURLの #d=デプロイID&k=合言葉 で受け取り、この端末に保存する
+let cfg=null;
+const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},
+  set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+{
+  const h=new URLSearchParams(location.hash.slice(1));
+  if(h.get('d')&&h.get('k')){cfg={d:h.get('d'),k:h.get('k')};store.set('epc-cfg',cfg)}
+  else cfg=store.get('epc-cfg');
+}
+const EVS=new Map(),loaded=new Set();
+const monthKey=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
+function indexEvents(){
+  SINGLE={};BANDS=[];
+  EVS.forEach(ev=>{
+    if(ev.s===ev.e)(SINGLE[ev.s]=SINGLE[ev.s]||[]).push({time:ev.tm,title:ev.t});
+    else BANDS.push({s:parseKey(ev.s),e:parseKey(ev.e),t:ev.t});
+  });
+}
+function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE})}
+const HOL_LIVE={};
+async function fetchRange(a,b){
+  const url=`https://script.google.com/macros/s/${cfg.d}/exec?k=${encodeURIComponent(cfg.k)}&from=${key(a)}&to=${key(b)}`;
+  const r=await fetch(url);const j=await r.json();
+  if(j.error)throw new Error(j.error);
+  const as=key(a),bs=key(b);
+  [...EVS.keys()].forEach(k=>{const ev=EVS.get(k);if(ev.s<=bs&&ev.e>=as)EVS.delete(k)});
+  j.ev.forEach(ev=>EVS.set(ev.k,ev));
+  Object.assign(HOL,j.h);Object.assign(HOL_LIVE,j.h);
+  for(let m=new Date(a.getFullYear(),a.getMonth(),1);m<=b;m=new Date(m.getFullYear(),m.getMonth()+1,1))loaded.add(monthKey(m));
+  saveCache();
+  return j.at;
+}
+let loading=false;
+async function ensure(force){
+  if(!cfg||loading)return;
+  const ms=[-1,0,1].map(i=>new Date(view.getFullYear(),view.getMonth()+i,1));
+  const need=force?ms:ms.filter(m=>!loaded.has(monthKey(m)));
+  if(!need.length)return;
+  loading=true;
+  try{
+    const at=await fetchRange(need[0],new Date(need[need.length-1].getFullYear(),need[need.length-1].getMonth()+1,0));
+    MSG=`Googleカレンダー ${at} 更新（メモ・ゴミの日はサンプル）`;
+  }catch(e){
+    MSG='更新できませんでした。前回のデータを表示しています';
+  }
+  loading=false;
+  $('msg').textContent=MSG;indexEvents();render();
+}
+
+// ---- サンプルの予定（接続先がないとき。今日を基準に作る） ----
+function sample(){
 for(let i=-2;i<=3;i++){
   const b=new Date(T.getFullYear(),T.getMonth()+i,1),y=b.getFullYear(),mo=b.getMonth(),dim=new Date(y,mo+1,0).getDate(),sh=mo%3;
   [[2+sh,'16:00','ピアノ'],[9+sh,'16:00','ピアノ'],[16+sh,'16:00','ピアノ'],[23+sh,'16:00','ピアノ'],
@@ -134,6 +187,12 @@ for(let i=-2;i<=3;i++){
 addE(T,'17:00','買い物当番');addE(addD(T,1),'7:30','朝練（次郎）');addE(addD(T,9),'','花子の誕生日');
 [[-6,-4,'出張（父）'],[4,6,'修学旅行（花子）'],[5,12,'おばあちゃん滞在'],[17,18,'家族旅行']]
   .forEach(([a,b,t])=>BANDS.push({s:addD(T,a),e:addD(T,b),t}));
+}
+if(cfg){
+  const c=store.get('epc-cache');
+  if(c){(c.ev||[]).forEach(ev=>EVS.set(ev.k,ev));Object.assign(HOL,c.h||{});Object.assign(HOL_LIVE,c.h||{})}
+  indexEvents();MSG='Googleカレンダーから読み込み中…';
+}else sample();
 
 // ゴミの日（サンプル：燃えるゴミ＝火・金、不燃＝第2・第4水曜）
 const garb=d=>{const w=d.getDay();if(w===2||w===5)return'ゴミ';
@@ -196,7 +255,7 @@ function render(){
 function refresh(fn){
   if(busy)return;busy=true;
   const f=$('flash');f.style.background='#000';f.style.display='block';
-  setTimeout(()=>{fn();render();f.style.background='#fff'},200);
+  setTimeout(()=>{fn();render();f.style.background='#fff';ensure()},200);
   setTimeout(()=>{f.style.display='none';busy=false},650);
 }
 const thisMonth=()=>new Date(T.getFullYear(),T.getMonth(),1);
@@ -227,7 +286,10 @@ function fit(){
   bar.style.width=msg.style.width=W*s+'px';
 }
 addEventListener('resize',fit);
-fit();render();
+// 10分ごとに表示中の前後の月を取り直す
+setInterval(()=>ensure(true),600000);
+$('msg').textContent=MSG;
+fit();render();ensure();
 }
 </script>
 </body>
