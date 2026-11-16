@@ -96,8 +96,11 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 #paper.compact .m small{font-size:52px;margin-left:4px}
 #paper.compact .td{margin:0 0 0 auto;font-size:40px}
 #paper.compact .minis{display:none}
-#paper.compact .memo{height:270px}
-#paper.compact .memo ul{height:240px}
+/* 1週＋詳細：詳細枠は1つで横幅いっぱい */
+.details.one{grid-template-columns:1fr}
+/* 下のボタン：位置と数はどのページも同じで、ページに合わせて名前を変える */
+#bar button.primary{background:#000;color:#fff}
+#bar button.off{opacity:.45}
 #msg{flex:none;color:#bdbdbd;font-size:13px;line-height:20px;height:24px;padding-top:4px;text-align:center}
 /* カラー表示（URLに mono=1 があれば白黒のまま） */
 body.color .mini .sun{background:none;color:var(--red)}
@@ -139,7 +142,7 @@ body.color .dh.sat .dn{border-bottom:none;border-radius:6px;color:var(--blue)}
 const W=1650,PAD=44,WDH=64,GAP=14;
 // 紙面の幅は1650で固定し、高さは画面の縦横比に合わせる（iPadでは横幅いっぱいに表示）
 let H=2200;
-const HEAD={m:300,mL:96,w3:300,w2:300},MEMO={m:190,mL:270,w3:190,w2:190};
+const HEAD={m:300,mL:96,w3:300,w2:300,w1:96},MEMO={m:190,mL:270,w3:190,w2:190,w1:350};
 const gridH=()=>H-PAD*2-HEAD[mode]-WDH-MEMO[mode]-GAP*3;
 const LINE=31,DATE_H=58,LANE=35;
 const DOW='日月火水木金土';
@@ -195,7 +198,7 @@ function indexEvents(){
 function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE,m:MEMO_LIVE})}
 // メモ欄：Google ToDoの未完了タスクのうち、表示中の月に期限があるものだけ（翌月には繰り越さない）
 let MEMO_LIVE=null;
-const memoMax=()=>mode==='mL'?12:8; // 2列×6行（月（大））／2列×4行
+const memoMax=()=>mode==='w1'?16:mode==='mL'?12:8; // 2列×8行（1週＋詳細）／2列×6行（月（大））／2列×4行
 function renderMemo(y,mo){
   if(!MEMO_LIVE)return;
   const pre=y+'-'+pad(mo+1)+'-';
@@ -266,14 +269,16 @@ if(cfg){
 }else sample();
 
 // ---- 表示の状態 ----
-// mode: 'm'=月、'w3'=3週、'w2'=2週＋詳細。ws=週の始まり（日曜）、sel=選んだ日
-const MODES=['m','mL','w3','w2'],MODE_NAME={m:'月',mL:'月（大）',w3:'3週',w2:'2週＋詳細'};
+// mode: 'm'=月、'mL'=月（大）、'w3'=3週、'w2'=2週＋詳細、'w1'=1週＋詳細。ws=週の始まり（日曜）、sel=選んだ日
+// 1週＋詳細は表示切替の順番に入れず、月・月（大）・3週でマスをタップしたときに開く。backMode=「戻る」（下の2番目のボタン）の行き先
+const MODES=['m','mL','w3','w2'],MODE_NAME={m:'月',mL:'月（大）',w3:'3週',w2:'2週＋詳細',w1:'1週＋詳細'};
 const isMonth=()=>mode==='m'||mode==='mL';
 const sunday=d=>addD(d,-d.getDay());
-let mode='m',ws=sunday(T),sel=T;
+let mode='m',ws=sunday(T),sel=T,backMode='m';
 function range(){
   if(isMonth()){const f=view,s=sunday(f),l=new Date(f.getFullYear(),f.getMonth()+1,0);return [s,addD(l,6-l.getDay())]}
   if(mode==='w3')return [ws,addD(ws,20)];
+  if(mode==='w1')return [ws,addD(ws,6)];
   return [ws,addD(ws,14)]; // 詳細枠の「次の日」が範囲の外になる場合も含める
 }
 function goHome(){
@@ -310,7 +315,7 @@ function weekRow(w0,rowH,mo){
     if(mo!==null&&d.getMonth()!==mo)cls.push('out');
     if(w===0||hn)cls.push('hol');else if(w===6)cls.push('sat');
     if(+d===+T)cls.push('today');
-    if(mode==='w2'&&+d===+sel)cls.push('sel');
+    if((mode==='w2'||mode==='w1')&&+d===+sel)cls.push('sel');
     // 並び順：終日の予定が先、その後に時刻順
     const evs=(SINGLE[k]||[]).slice().sort((a,b)=>tm(a.time)-tm(b.time));
     let list=evs,more=0;
@@ -346,17 +351,19 @@ function render(){
   const g=$('grid');
   // 見出し：表示している範囲の月
   const [a,b]=range();
-  const base=isMonth()?view:(mode==='w2'?sel:ws);
+  const base=isMonth()?view:(mode==='w2'||mode==='w1'?sel:ws);
   const y=base.getFullYear(),mo=base.getMonth();
   renderMemo(y,mo);
   $('y').textContent=y+'年';
   $('m').innerHTML=(mo+1)+'<small>月</small>';
-  const span=isMonth()?'':`${MODE_NAME[mode]}：${a.getMonth()+1}/${a.getDate()}〜${addD(ws,mode==='w3'?20:13).getMonth()+1}/${addD(ws,mode==='w3'?20:13).getDate()}　`;
+  const span=isMonth()||mode==='w1'?'':`${MODE_NAME[mode]}：${a.getMonth()+1}/${a.getDate()}〜${addD(ws,mode==='w3'?20:13).getMonth()+1}/${addD(ws,mode==='w3'?20:13).getDate()}　`;
   $('td').textContent=`${span}今日 ${md(T)}`;
   const p=new Date(y,mo-1,1),n=new Date(y,mo+1,1);
   $('minis').innerHTML=mini(p.getFullYear(),p.getMonth())+mini(n.getFullYear(),n.getMonth());
   let html='';
-  $('paper').classList.toggle('compact',mode==='mL');
+  $('paper').classList.toggle('compact',mode==='mL'||mode==='w1');
+  $('paper').classList.toggle('w1',mode==='w1');
+  const mm=$('paper').querySelector('.memo');mm.style.height=MEMO[mode]+'px';$('memo').style.height=(MEMO[mode]-30)+'px';
   const GRID_H=gridH();
   if(isMonth()){
     const first=view,start=sunday(first),dim=new Date(first.getFullYear(),first.getMonth()+1,0).getDate();
@@ -367,6 +374,11 @@ function render(){
     const rowH=GRID_H/3;
     g.style.gridTemplateRows='repeat(3,minmax(0,1fr))';
     for(let r=0;r<3;r++)html+=weekRow(addD(ws,r*7),rowH,null);
+  }else if(mode==='w1'){
+    const rowH=Math.round(GRID_H*0.38),dh=GRID_H-rowH-GAP;
+    g.style.gridTemplateRows=`${rowH}px ${GAP}px minmax(0,1fr)`;
+    html=weekRow(ws,rowH,null)+'<div></div>'
+      +`<div class="details one">${detail(sel,+sel===+T?'今日':'選んだ日',dh)}</div>`;
   }else{
     const rowH=GRID_H/3,dh=GRID_H-rowH*2-GAP;
     g.style.gridTemplateRows=`${rowH}px ${rowH}px ${GAP}px minmax(0,1fr)`;
@@ -374,7 +386,16 @@ function render(){
       +`<div class="details">${detail(sel,'選んだ日',dh)}${detail(addD(sel,1),'次の日',dh)}</div>`;
   }
   g.innerHTML=html;
+  // 下のボタン：1週＋詳細では「前の日／戻る／＋予定を追加／次の日」
+  const w1=mode==='w1';
+  $('bPrev').textContent=w1?'◀ 前の日':'◀ 前';
+  $('bToday').textContent=w1?'戻る':'今日';
+  $('bView').textContent=w1?'＋ 予定を追加':'表示切替';
+  $('bNext').textContent=w1?'次の日 ▶':'次 ▶';
+  $('bView').classList.toggle('primary',w1);
+  $('bView').classList.toggle('off',w1&&!CAN_ADD);
 }
+const CAN_ADD=false; // 予定の追加（入力画面）ができたら true にする
 
 // 画面の切り替え。eink=1 のときは電子ペーパーの書き換えを再現：黒→白→新しい画面（合計約0.65秒）
 function refresh(fn){
@@ -396,6 +417,7 @@ function say(t){
 function step(dir){
   if(isMonth())view=new Date(view.getFullYear(),view.getMonth()+dir,1);
   else if(mode==='w3')ws=addD(ws,7*dir);
+  else if(mode==='w1'){sel=addD(sel,dir);ws=sunday(sel)} // 1週＋詳細：選んだ日を1日ずつ動かし、週も合わせる
   else{
     // 2週＋詳細：選んだ日を1日ずつ動かし、2週の端を超えたら1週送る
     sel=addD(sel,dir);
@@ -416,14 +438,23 @@ function nextMode(){
 }
 $('bPrev').addEventListener('click',()=>{touched();refresh(()=>step(-1))});
 $('bNext').addEventListener('click',()=>{touched();refresh(()=>step(1))});
-$('bToday').addEventListener('click',()=>{touched();refresh(goHome)});
-$('bView').addEventListener('click',()=>{touched();const nm=MODE_NAME[MODES[(MODES.indexOf(mode)+1)%MODES.length]];refresh(nextMode);say(`表示：${nm}`)});
-// マスをタップ：2週＋詳細ではその日を選ぶ。月・3週ではその日を選んで2週＋詳細へ
+// 2番目のボタン：ふだんは「今日」、1週＋詳細では「戻る」（タップした元のページへ。選んでいた日の月・週を出す）
+$('bToday').addEventListener('click',()=>{touched();
+  if(mode==='w1')refresh(()=>{mode=backMode;view=new Date(sel.getFullYear(),sel.getMonth(),1);ws=sunday(sel)});
+  else refresh(goHome);
+});
+// 3番目のボタン：ふだんは「表示切替」、1週＋詳細では「＋予定を追加」
+$('bView').addEventListener('click',()=>{touched();
+  if(mode==='w1'){if(!CAN_ADD)say('予定の追加は準備中です');return}
+  const nm=MODE_NAME[MODES[(MODES.indexOf(mode)+1)%MODES.length]];refresh(nextMode);say(`表示：${nm}`)});
+// マスをタップ：2週＋詳細・1週＋詳細ではその日を選ぶ。月・月（大）・3週ではその日を選んで1週＋詳細へ
 $('grid').addEventListener('click',e=>{
   const c=e.target.closest('.c');if(!c)return;
   const d=parseKey(c.dataset.d);touched();
-  refresh(()=>{sel=d;ws=sunday(d);if(sel>addD(ws,13))ws=addD(ws,7);mode='w2'});
+  if(mode==='w2')refresh(()=>{sel=d;ws=sunday(d);if(sel>addD(ws,13))ws=addD(ws,7)});
+  else refresh(()=>{if(mode!=='w1')backMode=mode;sel=d;ws=sunday(d);mode='w1'});
 });
+
 
 // 日付が変わったら描き直す
 setInterval(()=>{const t=today();if(+t!==+T){const home=isHome();T=t;if(home)goHome();render()}},60000);
