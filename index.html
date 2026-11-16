@@ -11,14 +11,14 @@
 <style>
 /* VOICE: 家族の壁掛けカレンダー。静かで、離れても読める
    IDEA: 白黒の電子ペーパー端末そのもの（紙面＋物理ボタン）
-   PICTURE: 本番解像度1650×2200の紙面を、画面に合わせて縮小表示
+   PICTURE: 幅1650の紙面を、画面の横幅いっぱいに縮小表示（高さは画面の縦横比に合わせる。電子ペーパーの1650×2200でも同じ作り）
    COLOUR/TYPE: 白・黒・グレー＋少しの色（日曜・祝日は赤、土曜は青、今日はオレンジ）。URLの mono=1 で白黒だけ。ヒラギノ角ゴ、日付は太い数字
    LAYOUT: 紙面を画面いっぱいに、その下にボタン4つ */
 :root{color-scheme:light;--red:#d0262d;--blue:#1f5fbf;--today:#f08a00}
 *{box-sizing:border-box;margin:0;padding:0;min-width:0}
 html,body{height:100%;background:#262626;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation}
 body{font-family:-apple-system,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;color:#000;display:flex;flex-direction:column;align-items:center}
-#wrap{position:relative;flex:none;margin-top:8px;overflow:hidden;background:#fff}
+#wrap{position:relative;flex:none;margin-top:4px;overflow:hidden;background:#fff}
 #paper{position:absolute;left:0;top:0;width:1650px;height:2200px;background:#fff;transform-origin:0 0;padding:44px;display:flex;flex-direction:column;gap:14px}
 #flash{position:absolute;inset:0;background:#000;display:none;z-index:9}
 header{height:300px;flex:none;display:flex;justify-content:space-between;align-items:flex-start}
@@ -85,9 +85,19 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .memo li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .memo li b{margin-left:8px;font-size:23px}
 .memo li.more{font-weight:800}
-#bar{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding-top:10px}
+#bar{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding-top:8px}
 #bar button{font:inherit;font-size:19px;font-weight:700;height:56px;border:2px solid #000;border-radius:10px;background:#e8e8e8;color:#000;-webkit-tap-highlight-color:transparent}
 #bar button:active{background:#000;color:#fff}
+/* 月（大）：表題を1行にし、前後の月を出さない。メモは2列×6行 */
+#paper.compact header{height:96px;align-items:center}
+#paper.compact header>div:first-child{flex:1;display:flex;align-items:baseline;gap:20px}
+#paper.compact .y{font-size:52px}
+#paper.compact .m{font-size:84px;letter-spacing:0;line-height:1}
+#paper.compact .m small{font-size:52px;margin-left:4px}
+#paper.compact .td{margin:0 0 0 auto;font-size:40px}
+#paper.compact .minis{display:none}
+#paper.compact .memo{height:270px}
+#paper.compact .memo ul{height:240px}
 #msg{flex:none;color:#bdbdbd;font-size:13px;line-height:20px;height:24px;padding-top:4px;text-align:center}
 /* カラー表示（URLに mono=1 があれば白黒のまま） */
 body.color .mini .sun{background:none;color:var(--red)}
@@ -126,8 +136,11 @@ body.color .dh.sat .dn{border-bottom:none;border-radius:6px;color:var(--blue)}
 <div id="msg">予定とメモはサンプルです（試作版）</div>
 <script>
 {
-const W=1650,H=2200,PAD=44,HEAD=300,WDH=64,MEMO=190,GAP=14;
-const GRID_H=H-PAD*2-HEAD-WDH-MEMO-GAP*3;
+const W=1650,PAD=44,WDH=64,GAP=14;
+// 紙面の幅は1650で固定し、高さは画面の縦横比に合わせる（iPadでは横幅いっぱいに表示）
+let H=2200;
+const HEAD={m:300,mL:96,w3:300,w2:300},MEMO={m:190,mL:270,w3:190,w2:190};
+const gridH=()=>H-PAD*2-HEAD[mode]-WDH-MEMO[mode]-GAP*3;
 const LINE=31,DATE_H=58,LANE=35;
 const DOW='日月火水木金土';
 let MSG='予定とメモはサンプルです（試作版）';
@@ -182,13 +195,14 @@ function indexEvents(){
 function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE,m:MEMO_LIVE})}
 // メモ欄：Google ToDoの未完了タスクのうち、表示中の月に期限があるものだけ（翌月には繰り越さない）
 let MEMO_LIVE=null;
-const MEMO_MAX=8; // 2列×4行
+const memoMax=()=>mode==='mL'?12:8; // 2列×6行（月（大））／2列×4行
 function renderMemo(y,mo){
   if(!MEMO_LIVE)return;
   const pre=y+'-'+pad(mo+1)+'-';
   const items=MEMO_LIVE.filter(m=>m.due&&m.due.startsWith(pre));
   const esc=t=>t.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
   let list=items,more='';
+  const MEMO_MAX=memoMax();
   if(list.length>MEMO_MAX){list=list.slice(0,MEMO_MAX-1);more=`<li class="more">ほか${items.length-list.length}件</li>`}
   $('memo').innerHTML=list.map(m=>`<li>・${esc(m.t)}</li>`).join('')+more
     +(items.length?'':'<li style="color:#777">メモはありません</li>');
@@ -253,11 +267,12 @@ if(cfg){
 
 // ---- 表示の状態 ----
 // mode: 'm'=月、'w3'=3週、'w2'=2週＋詳細。ws=週の始まり（日曜）、sel=選んだ日
-const MODES=['m','w3','w2'],MODE_NAME={m:'月',w3:'3週',w2:'2週＋詳細'};
+const MODES=['m','mL','w3','w2'],MODE_NAME={m:'月',mL:'月（大）',w3:'3週',w2:'2週＋詳細'};
+const isMonth=()=>mode==='m'||mode==='mL';
 const sunday=d=>addD(d,-d.getDay());
 let mode='m',ws=sunday(T),sel=T;
 function range(){
-  if(mode==='m'){const f=view,s=sunday(f),l=new Date(f.getFullYear(),f.getMonth()+1,0);return [s,addD(l,6-l.getDay())]}
+  if(isMonth()){const f=view,s=sunday(f),l=new Date(f.getFullYear(),f.getMonth()+1,0);return [s,addD(l,6-l.getDay())]}
   if(mode==='w3')return [ws,addD(ws,20)];
   return [ws,addD(ws,14)]; // 詳細枠の「次の日」が範囲の外になる場合も含める
 }
@@ -265,7 +280,7 @@ function goHome(){
   T=today();view=new Date(T.getFullYear(),T.getMonth(),1);ws=sunday(T);sel=T;
 }
 function isHome(){
-  if(mode==='m')return +view===+new Date(T.getFullYear(),T.getMonth(),1);
+  if(isMonth())return +view===+new Date(T.getFullYear(),T.getMonth(),1);
   if(mode==='w3')return +ws===+sunday(T);
   return +ws===+sunday(T)&&+sel===+T;
 }
@@ -331,17 +346,19 @@ function render(){
   const g=$('grid');
   // 見出し：表示している範囲の月
   const [a,b]=range();
-  const base=mode==='m'?view:(mode==='w2'?sel:ws);
+  const base=isMonth()?view:(mode==='w2'?sel:ws);
   const y=base.getFullYear(),mo=base.getMonth();
   renderMemo(y,mo);
   $('y').textContent=y+'年';
   $('m').innerHTML=(mo+1)+'<small>月</small>';
-  const span=mode==='m'?'':`${MODE_NAME[mode]}：${a.getMonth()+1}/${a.getDate()}〜${addD(ws,mode==='w3'?20:13).getMonth()+1}/${addD(ws,mode==='w3'?20:13).getDate()}　`;
+  const span=isMonth()?'':`${MODE_NAME[mode]}：${a.getMonth()+1}/${a.getDate()}〜${addD(ws,mode==='w3'?20:13).getMonth()+1}/${addD(ws,mode==='w3'?20:13).getDate()}　`;
   $('td').textContent=`${span}今日 ${md(T)}`;
   const p=new Date(y,mo-1,1),n=new Date(y,mo+1,1);
   $('minis').innerHTML=mini(p.getFullYear(),p.getMonth())+mini(n.getFullYear(),n.getMonth());
   let html='';
-  if(mode==='m'){
+  $('paper').classList.toggle('compact',mode==='mL');
+  const GRID_H=gridH();
+  if(isMonth()){
     const first=view,start=sunday(first),dim=new Date(first.getFullYear(),first.getMonth()+1,0).getDate();
     const rows=Math.ceil((first.getDay()+dim)/7),rowH=GRID_H/rows;
     g.style.gridTemplateRows=`repeat(${rows},minmax(0,1fr))`;
@@ -377,7 +394,7 @@ function say(t){
   msgTimer=setTimeout(()=>{$('msg').textContent=MSG},2500);
 }
 function step(dir){
-  if(mode==='m')view=new Date(view.getFullYear(),view.getMonth()+dir,1);
+  if(isMonth())view=new Date(view.getFullYear(),view.getMonth()+dir,1);
   else if(mode==='w3')ws=addD(ws,7*dir);
   else{
     // 2週＋詳細：選んだ日を1日ずつ動かし、2週の端を超えたら1週送る
@@ -392,7 +409,7 @@ function nextMode(){
     ws=+view===+new Date(T.getFullYear(),T.getMonth(),1)?sunday(T):sunday(view);
   }else if(nm==='w2'){ // 3週→2週＋詳細：今日が範囲内なら今日を選ぶ
     sel=(T>=ws&&T<=addD(ws,13))?T:ws;
-  }else{ // 2週＋詳細→月：選んでいた日の月
+  }else if(nm==='m'){ // 2週＋詳細→月：選んでいた日の月
     view=new Date(sel.getFullYear(),sel.getMonth(),1);
   }
   mode=nm;
@@ -400,7 +417,7 @@ function nextMode(){
 $('bPrev').addEventListener('click',()=>{touched();refresh(()=>step(-1))});
 $('bNext').addEventListener('click',()=>{touched();refresh(()=>step(1))});
 $('bToday').addEventListener('click',()=>{touched();refresh(goHome)});
-$('bView').addEventListener('click',()=>{touched();const nm=MODE_NAME[MODES[(MODES.indexOf(mode)+1)%3]];refresh(nextMode);say(`表示：${nm}`)});
+$('bView').addEventListener('click',()=>{touched();const nm=MODE_NAME[MODES[(MODES.indexOf(mode)+1)%MODES.length]];refresh(nextMode);say(`表示：${nm}`)});
 // マスをタップ：2週＋詳細ではその日を選ぶ。月・3週ではその日を選んで2週＋詳細へ
 $('grid').addEventListener('click',e=>{
   const c=e.target.closest('.c');if(!c)return;
@@ -413,13 +430,17 @@ setInterval(()=>{const t=today();if(+t!==+T){const home=isHome();T=t;if(home)goH
 
 function fit(){
   const bar=$('bar'),msg=$('msg'),wrap=$('wrap');
-  const reserve=bar.offsetHeight+msg.offsetHeight+16;
-  const s=Math.min((innerWidth-16)/W,(innerHeight-reserve)/H);
+  const reserve=bar.offsetHeight+msg.offsetHeight+10;
+  // 横幅いっぱいに合わせ、紙面の高さは残りの縦に合わせる（極端に低くならないよう1500〜2400に収める）
+  let s=(innerWidth-12)/W;
+  H=Math.round((innerHeight-reserve)/s);
+  if(H<1500||H>2400){H=Math.min(2400,Math.max(1500,H));s=Math.min(s,(innerHeight-reserve)/H)}
   wrap.style.width=W*s+'px';wrap.style.height=H*s+'px';
+  $('paper').style.height=H+'px';
   $('paper').style.transform=`scale(${s})`;
   bar.style.width=msg.style.width=W*s+'px';
 }
-addEventListener('resize',fit);
+addEventListener('resize',()=>{fit();render()});
 // 10分ごとに表示中の範囲を取り直す
 setInterval(()=>ensure(true),600000);
 $('msg').textContent=MSG;
