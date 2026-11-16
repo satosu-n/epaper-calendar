@@ -45,6 +45,7 @@ function doGet(e) {
   const today = parse_(fmt_(new Date(), 'yyyy-MM-dd'));
   const min = new Date(today.getTime() - PAST_DAYS * 864e5);
   const max = new Date(today.getTime() + FUTURE_DAYS * 864e5);
+  const minS = fmt_(min, 'yyyy-MM-dd'), maxS = fmt_(max, 'yyyy-MM-dd');
   if (from < min) from = min;
   if (to > max) to = max;
 
@@ -63,11 +64,11 @@ function doGet(e) {
       });
     }
   }
-  return json_({ ev: ev, h: h, m: memo_(props), at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props) });
+  return json_({ ev: ev, h: h, m: memo_(props, minS, maxS), at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props) });
 }
 
-// メモ欄：Google ToDoの未完了タスク。期限が近い順（期限なしは後ろ）。月ごとの絞り込みは画面側で行う
-function memo_(props) {
+// メモ欄：Google ToDoの未完了タスクのうち、期限が取得できる期間（minS〜maxS）に入るもの。月ごとの絞り込みは画面側で行う
+function memo_(props, minS, maxS) {
   if (typeof Tasks === 'undefined') return null; // Tasks API が未追加
   try {
     let ids = (props.getProperty('TASKLIST_IDS') || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -77,11 +78,16 @@ function memo_(props) {
       let pageToken;
       do {
         const r = Tasks.Tasks.list(id, { showCompleted: false, showHidden: false, maxResults: 100, pageToken: pageToken });
-        (r.items || []).forEach(t => { if (t.title) out.push({ t: t.title, due: t.due ? t.due.slice(0, 10) : '', p: t.position || '' }); });
+        (r.items || []).forEach(t => {
+          const due = t.due ? t.due.slice(0, 10) : '';
+          if (!t.title || !due) return;               // 期限なしは表示しない
+          if (minS && (due < minS || due > maxS)) return; // 期間外（昔の未完了など）は送らない
+          out.push({ t: t.title, due: due, p: t.position || '' });
+        });
         pageToken = r.nextPageToken;
       } while (pageToken);
     });
-    out.sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : (a.p < b.p ? -1 : 1));
+    out.sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : (a.p < b.p ? -1 : 1));
     return out.slice(0, 500).map(x => ({ t: x.t, due: x.due }));
   } catch (err) {
     console.error('ToDoを読めませんでした: ' + err);
@@ -169,8 +175,8 @@ function setup() {
   Logger.log('合言葉: ' + token);
   Logger.log('通知の送り先: ' + alertTo_());
   Logger.log('表示するカレンダー: ' + (props.getProperty('CALENDAR_IDS') || '（全カレンダー）'));
-  const m = memo_(props);
-  Logger.log(m === null ? 'メモ欄：Tasks API が追加されていないか、読めませんでした' : 'メモ欄：未完了のタスク ' + m.length + ' 件');
+  const m = memo_(props, '', '');
+  Logger.log(m === null ? 'メモ欄：Tasks API が追加されていないか、読めませんでした' : 'メモ欄：期限つきの未完了タスク ' + m.length + ' 件');
   Logger.log('iPad用URL: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
 }
 
