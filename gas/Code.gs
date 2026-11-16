@@ -6,6 +6,14 @@
  *   CALENDAR_IDS  … 表示するカレンダーのID。複数ならカンマ区切り。空なら祝日・誕生日以外の全カレンダー
  *   TASKLIST_IDS  … メモ欄に出すToDoリストのID。複数ならカンマ区切り。空ならすべてのリスト
  *   ALERT_TO      … 不審なアクセスの通知先メールアドレス。空ならこのスクリプトの持ち主
+ *   ADD_CALENDAR_ID … 壁から予定を追加するカレンダーのID（家族の共有カレンダー）。空なら追加は使えない
+ *
+ * 予定の追加（壁の「＋予定を追加」）の安全のための制限
+ *  ・書き込めるのは ADD_CALENDAR_ID のカレンダーだけ
+ *  ・日付は今日から1年先まで、予定名は60文字まで、同じ日のうちに終わる予定だけ
+ *  ・追加できるのは1日20件まで
+ *  ・壁から登録した予定には見えない目印（タグ epc=wall）を付ける。「取り消す」で消せるのは、
+ *    この目印があり、登録から2分以内の予定だけ（既存の予定は消せない）
  *
  * 事前に、エディタ左の「サービス」の＋から「Tasks API」を追加しておくこと（メモ欄用）
  *
@@ -28,6 +36,9 @@ const TZ = 'Asia/Tokyo';
 const PAST_DAYS = 62;     // 取得できる範囲：今日から約2か月前まで
 const FUTURE_DAYS = 366;  // 取得できる範囲：今日から1年先まで
 const ALERT_INTERVAL_MIN = 60; // 不審なアクセスのメール通知は、多くてもこの間隔で1通
+const ADD_MAX_PER_DAY = 20;    // 壁から追加できる予定は1日にこの件数まで
+const UNDO_MINUTES = 2;        // 「取り消す」で消せるのは、登録からこの分数以内の予定だけ
+const TITLE_MAX = 60;          // 予定名の最大文字数
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
@@ -64,7 +75,73 @@ function doGet(e) {
       });
     }
   }
-  return json_({ ev: ev, h: h, m: memo_(props, minS, maxS), at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props) });
+  return json_({ ev: ev, h: h, m: memo_(props, minS, maxS), at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props),
+    add: !!(props.getProperty('ADD_CALENDAR_ID') || '').trim() });
+}
+
+// ---- 予定の追加・取り消し（壁の「＋予定を追加」から） ----
+// 本文（JSON）：{ k: 合言葉, act: 'add', d: 'yyyy-MM-dd', t: 予定名, s: 'H:mm'（空なら終日）, e: 'H:mm'（空なら1時間） }
+//              { k: 合言葉, act: 'undo', id: 追加したときに返したID }
+function doPost(e) {
+  let p;
+  try { p = JSON.parse((e && e.postData && e.postData.contents) || '{}'); } catch (err) { return json_({ error: 'bad request' }); }
+  const props = PropertiesService.getScriptProperties();
+  const token = props.getProperty('TOKEN');
+  if (!token || p.k !== token) {
+    recordFailure_(props);
+    return json_({ error: 'forbidden' });
+  }
+  const calId = (props.getProperty('ADD_CALENDAR_ID') || '').trim();
+  const cal = calId ? CalendarApp.getCalendarById(calId) : null;
+  if (!cal) return json_({ error: 'add disabled' });
+  if (p.act === 'add') return json_(addEvent_(props, cal, p));
+  if (p.act === 'undo') return json_(undoEvent_(cal, p));
+  return json_({ error: 'bad request' });
+}
+
+function addEvent_(props, cal, p) {
+  const title = String(p.t || '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  if (!title || title.length > TITLE_MAX) return { error: 'bad title' };
+  const day = parse_(p.d);
+  const today = parse_(fmt_(new Date(), 'yyyy-MM-dd'));
+  if (!day || day < today || day > new Date(today.getTime() + FUTURE_DAYS * 864e5)) return { error: 'bad date' };
+  let start = null, end = null;
+  if (p.s) {
+    const sm = minutes_(p.s);
+    const em = p.e ? minutes_(p.e) : (sm === null ? null : Math.min(sm + 60, 24 * 60));
+    if (sm === null || em === null || em <= sm || em > 24 * 60) return { error: 'bad time' };
+    start = new Date(day.getTime() + sm * 60000);
+    end = new Date(day.getTime() + em * 60000);
+  }
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { error: 'busy' };
+  try {
+    const todayS = fmt_(new Date(), 'yyyy-MM-dd');
+    const log = JSON.parse(props.getProperty('ADD_LOG') || '{}');
+    const n = log.d === todayS ? log.n : 0;
+    if (n >= ADD_MAX_PER_DAY) return { error: 'limit' };
+    const ev = start ? cal.createEvent(title, start, end) : cal.createAllDayEvent(title, day);
+    ev.setTag('epc', 'wall');
+    props.setProperty('ADD_LOG', JSON.stringify({ d: todayS, n: n + 1 }));
+    return { ok: true, id: ev.getId(), ev: conv_(ev) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// 取り消し：壁から登録した予定（目印つき）で、登録から UNDO_MINUTES 分以内のものだけ消せる
+function undoEvent_(cal, p) {
+  const ev = p.id ? cal.getEventById(String(p.id)) : null;
+  if (!ev || ev.getTag('epc') !== 'wall') return { error: 'not found' };
+  if (Date.now() - ev.getDateCreated().getTime() > UNDO_MINUTES * 60000) return { error: 'too old' };
+  ev.deleteEvent();
+  return { ok: true };
+}
+
+function minutes_(s) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s || '');
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  return +m[1] * 60 + +m[2];
 }
 
 // メモ欄：Google ToDoの未完了タスクのうち、期限が取得できる期間（minS〜maxS）に入るもの。月ごとの絞り込みは画面側で行う
@@ -169,12 +246,15 @@ function setup() {
     token = Utilities.getUuid().replace(/-/g, '');
     props.setProperty('TOKEN', token);
   }
-  ['CALENDAR_IDS', 'TASKLIST_IDS', 'ALERT_TO'].forEach(k => { if (props.getProperty(k) === null) props.setProperty(k, ''); });
+  ['CALENDAR_IDS', 'TASKLIST_IDS', 'ALERT_TO', 'ADD_CALENDAR_ID'].forEach(k => { if (props.getProperty(k) === null) props.setProperty(k, ''); });
   CalendarApp.getAllCalendars();            // カレンダーの権限の確認用
   MailApp.getRemainingDailyQuota();         // メール送信の権限の確認用
   Logger.log('合言葉: ' + token);
   Logger.log('通知の送り先: ' + alertTo_());
   Logger.log('表示するカレンダー: ' + (props.getProperty('CALENDAR_IDS') || '（全カレンダー）'));
+  const addId = (props.getProperty('ADD_CALENDAR_ID') || '').trim();
+  const addCal = addId ? CalendarApp.getCalendarById(addId) : null;
+  Logger.log('予定を追加するカレンダー: ' + (addCal ? addCal.getName() : addId ? '（IDが見つかりません）' : '（未設定：追加は使えません）'));
   const m = memo_(props, '', '');
   Logger.log(m === null ? 'メモ欄：Tasks API が追加されていないか、読めませんでした' : 'メモ欄：期限つきの未完了タスク ' + m.length + ' 件');
   Logger.log('iPad用URL: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
