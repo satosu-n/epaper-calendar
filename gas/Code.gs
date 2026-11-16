@@ -66,7 +66,7 @@ function doGet(e) {
   return json_({ ev: ev, h: h, m: memo_(props), at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props) });
 }
 
-// メモ欄：Google ToDoの未完了タスク。期限が近い順（期限なしは後ろ）
+// メモ欄：Google ToDoの未完了タスク。期限が近い順（期限なしは後ろ）。月ごとの絞り込みは画面側で行う
 function memo_(props) {
   if (typeof Tasks === 'undefined') return null; // Tasks API が未追加
   try {
@@ -74,11 +74,15 @@ function memo_(props) {
     if (!ids.length) ids = (Tasks.Tasklists.list({ maxResults: 100 }).items || []).map(l => l.id);
     const out = [];
     ids.forEach(id => {
-      (Tasks.Tasks.list(id, { showCompleted: false, showHidden: false, maxResults: 100 }).items || [])
-        .forEach(t => { if (t.title) out.push({ t: t.title, due: t.due ? t.due.slice(0, 10) : '', p: t.position || '' }); });
+      let pageToken;
+      do {
+        const r = Tasks.Tasks.list(id, { showCompleted: false, showHidden: false, maxResults: 100, pageToken: pageToken });
+        (r.items || []).forEach(t => { if (t.title) out.push({ t: t.title, due: t.due ? t.due.slice(0, 10) : '', p: t.position || '' }); });
+        pageToken = r.nextPageToken;
+      } while (pageToken);
     });
     out.sort((a, b) => (a.due || '9') < (b.due || '9') ? -1 : (a.due || '9') > (b.due || '9') ? 1 : (a.p < b.p ? -1 : 1));
-    return out.slice(0, 50).map(x => ({ t: x.t, due: x.due }));
+    return out.slice(0, 500).map(x => ({ t: x.t, due: x.due }));
   } catch (err) {
     console.error('ToDoを読めませんでした: ' + err);
     return null;
