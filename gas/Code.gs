@@ -199,6 +199,23 @@ function listCalendars() {
   CalendarApp.getAllCalendars().forEach(c => Logger.log(c.getName() + '  →  ' + c.getId()));
 }
 
+// 確認用：未完了タスクをリストごとに全部ログに出す（期限・繰り返しの有無つき）
+function listTasks() {
+  (Tasks.Tasklists.list({ maxResults: 100 }).items || []).forEach(l => {
+    Logger.log('■ ' + l.title + '  →  ' + l.id);
+    let pageToken, n = 0;
+    do {
+      const r = Tasks.Tasks.list(l.id, { showCompleted: false, showHidden: false, maxResults: 100, pageToken: pageToken });
+      (r.items || []).forEach(t => {
+        n++;
+        Logger.log('  ' + (t.due ? t.due.slice(0, 10) : '期限なし') + '  ' + t.title + (t.recurrence || t.recurringTaskId ? '（繰り返し）' : ''));
+      });
+      pageToken = r.nextPageToken;
+    } while (pageToken);
+    Logger.log('  → ' + n + ' 件');
+  });
+}
+
 function listTaskLists() {
   (Tasks.Tasklists.list({ maxResults: 100 }).items || []).forEach(l => Logger.log(l.title + '  →  ' + l.id));
 }
