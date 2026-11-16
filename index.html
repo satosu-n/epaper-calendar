@@ -12,9 +12,9 @@
 /* VOICE: 家族の壁掛けカレンダー。静かで、離れても読める
    IDEA: 白黒の電子ペーパー端末そのもの（紙面＋物理ボタン）
    PICTURE: 本番解像度1650×2200の紙面を、画面に合わせて縮小表示
-   COLOUR/TYPE: 白・黒・グレーだけ。ヒラギノ角ゴ、日付は太い数字
+   COLOUR/TYPE: 白・黒・グレー＋少しの色（日曜・祝日は赤、土曜は青、今日はオレンジ）。URLの mono=1 で白黒だけ。ヒラギノ角ゴ、日付は太い数字
    LAYOUT: 紙面を画面いっぱいに、その下にボタン4つ */
-:root{color-scheme:light}
+:root{color-scheme:light;--red:#d0262d;--blue:#1f5fbf;--today:#f08a00}
 *{box-sizing:border-box;margin:0;padding:0;min-width:0}
 html,body{height:100%;background:#262626;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation}
 body{font-family:-apple-system,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;color:#000;display:flex;flex-direction:column;align-items:center}
@@ -89,6 +89,19 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 #bar button{font:inherit;font-size:19px;font-weight:700;height:56px;border:2px solid #000;border-radius:10px;background:#e8e8e8;color:#000;-webkit-tap-highlight-color:transparent}
 #bar button:active{background:#000;color:#fff}
 #msg{flex:none;color:#bdbdbd;font-size:13px;line-height:20px;height:24px;padding-top:4px;text-align:center}
+/* カラー表示（URLに mono=1 があれば白黒のまま） */
+body.color .mini .sun{background:none;color:var(--red)}
+body.color .mini .sat{text-decoration:none;color:var(--blue)}
+body.color .wd .sun span{background:none;color:var(--red);padding:0}
+body.color .wd .sat span{border-bottom:none;color:var(--blue)}
+body.color .hol .n{background:none;color:var(--red)}
+body.color .sat .n{border-bottom:none;border-radius:6px;line-height:44px;color:var(--blue)}
+body.color .out.hol .n{background:none;color:#eaa3a6}
+body.color .out.sat .n{color:#a3bce3}
+body.color .c.today,body.color .c.sel.today{box-shadow:inset 0 0 0 8px var(--today)}
+body.color .dbox.today{border-color:var(--today)}
+body.color .dh.hol .dn{background:none;color:var(--red)}
+body.color .dh.sat .dn{border-bottom:none;border-radius:6px;color:var(--blue)}
 </style>
 </head>
 <body>
@@ -152,6 +165,11 @@ const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){retu
   if(h.get('d')&&h.get('k')){cfg={d:h.get('d'),k:h.get('k')};store.set('epc-cfg',cfg)}
   else cfg=store.get('epc-cfg');
 }
+// 表示の設定：URLの mono=1 で白黒だけ、eink=1 で画面切り替えの待ち時間あり（電子ペーパーの再現）
+// URLに書いたときはこの端末に保存する（書いていなければ前回の設定。初期値はカラー・待ち時間なし）
+const opt=k=>{const v=new URLSearchParams(location.hash.slice(1)).get(k);if(v!==null)store.set('epc-'+k,v);return (v!==null?v:store.get('epc-'+k))==='1'};
+const MONO=opt('mono'),EINK=opt('eink');
+document.body.classList.toggle('color',!MONO);
 const EVS=new Map(),loaded=new Set();
 const monthKey=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
 function indexEvents(){
@@ -341,8 +359,9 @@ function render(){
   g.innerHTML=html;
 }
 
-// 電子ペーパーの書き換えを再現：黒→白→新しい画面（合計約0.65秒）
+// 画面の切り替え。eink=1 のときは電子ペーパーの書き換えを再現：黒→白→新しい画面（合計約0.65秒）
 function refresh(fn){
+  if(!EINK){fn();render();ensure();return}
   if(busy)return;busy=true;
   const f=$('flash');f.style.background='#000';f.style.display='block';
   setTimeout(()=>{fn();render();f.style.background='#fff';ensure()},200);
@@ -381,7 +400,7 @@ function nextMode(){
 $('bPrev').addEventListener('click',()=>{touched();refresh(()=>step(-1))});
 $('bNext').addEventListener('click',()=>{touched();refresh(()=>step(1))});
 $('bToday').addEventListener('click',()=>{touched();refresh(goHome)});
-$('bView').addEventListener('click',()=>{touched();refresh(nextMode);say(`表示：${MODE_NAME[MODES[(MODES.indexOf(mode)+1)%3]]}`)});
+$('bView').addEventListener('click',()=>{touched();const nm=MODE_NAME[MODES[(MODES.indexOf(mode)+1)%3]];refresh(nextMode);say(`表示：${nm}`)});
 // マスをタップ：2週＋詳細ではその日を選ぶ。月・3週ではその日を選んで2週＋詳細へ
 $('grid').addEventListener('click',e=>{
   const c=e.target.closest('.c');if(!c)return;
