@@ -162,16 +162,15 @@ function indexEvents(){
   });
 }
 function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE,m:MEMO_LIVE})}
-// メモ欄：Google ToDoの未完了タスク（期限が近い順）
+// メモ欄：Google ToDoの未完了タスク（並びは期限が近い順、期限は表示しない）
 let MEMO_LIVE=null;
 const MEMO_MAX=8; // 2列×4行
 function renderMemo(){
   if(!MEMO_LIVE)return;
   const esc=t=>t.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-  const due=d=>{if(!d)return'';const x=parseKey(d);return `<b>${+x===+T?'今日':(x<T?'期限切れ':(x.getMonth()+1)+'/'+x.getDate())}</b>`};
   let list=MEMO_LIVE,more='';
   if(list.length>MEMO_MAX){list=list.slice(0,MEMO_MAX-1);more=`<li class="more">ほか${MEMO_LIVE.length-list.length}件</li>`}
-  $('memo').innerHTML=list.map(m=>`<li>・${esc(m.t)}${due(m.due)}</li>`).join('')+more
+  $('memo').innerHTML=list.map(m=>`<li>・${esc(m.t)}</li>`).join('')+more
     +(MEMO_LIVE.length?'':'<li style="color:#777">メモはありません</li>');
 }
 const HOL_LIVE={};
