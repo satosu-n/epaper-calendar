@@ -139,6 +139,10 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .undo.show{display:flex}
 .undo span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .undo button{flex:none;font:inherit;font-size:42px;font-weight:800;height:130px;padding:0 48px;background:#fff;color:#000;border:4px solid #000;border-radius:18px}
+/* 夜の画面：白黒を反転して暗くする（色は色相を戻して残す）。周りも真っ黒に */
+body.night{background:#000}
+body.night #wrap,body.night #bar{filter:invert(1) hue-rotate(180deg) brightness(.5)}
+body.night #msg{color:#333}
 #msg{flex:none;color:#bdbdbd;font-size:13px;line-height:20px;height:24px;padding-top:4px;text-align:center}
 /* カラー表示（URLに mono=1 があれば白黒のまま） */
 body.color .mini .sun{background:none;color:var(--red)}
@@ -244,6 +248,9 @@ const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){retu
 // URLに書いたときはこの端末に保存する（書いていなければ前回の設定。初期値はカラー・待ち時間なし）
 const opt=k=>{const v=new URLSearchParams(location.hash.slice(1)).get(k);if(v!==null)store.set('epc-'+k,v);return (v!==null?v:store.get('epc-'+k))==='1'};
 const MONO=opt('mono'),EINK=opt('eink');
+// 夜の時間帯：URLの night=23-5 のように「始まり-終わり」（時）で指定。night=off で使わない。初期値は22時〜6時
+const NIGHT=(()=>{const h=new URLSearchParams(location.hash.slice(1)).get('night');if(h!==null)store.set('epc-night',h);
+  const v=h!==null?h:(store.get('epc-night')||'22-6');const m=/^(\d{1,2})-(\d{1,2})$/.exec(v);return m?[+m[1],+m[2]]:null})();
 document.body.classList.toggle('color',!MONO);
 const EVS=new Map(),loaded=new Set();
 const monthKey=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
@@ -558,7 +565,17 @@ function refresh(fn){
   setTimeout(()=>{fn();render();f.style.background='#fff';ensure()},200);
   setTimeout(()=>{f.style.display='none';busy=false},650);
 }
+// 夜の画面：夜の時間帯で、最後に触ってから3分たっていれば暗くする。触るとふだんの画面に戻る
+let wakeUntil=0;
+const inNight=()=>{if(!NIGHT)return false;const h=new Date().getHours(),[a,b]=NIGHT;return a<b?(h>=a&&h<b):(h>=a||h<b)};
+function applyNight(){document.body.classList.toggle('night',inNight()&&Date.now()>wakeUntil)}
+// 夜の画面のときの最初のタッチは、画面を戻すだけにする（ボタンなどは押さない）
+document.addEventListener('click',e=>{
+  if(!document.body.classList.contains('night'))return;
+  e.preventDefault();e.stopPropagation();touched();
+},true);
 function touched(){
+  wakeUntil=Date.now()+180000;applyNight();
   clearTimeout(idle);
   // 3分操作がなければ今日に戻る（表示の種類はそのまま）
   idle=setTimeout(()=>{T=today();if(adding)closeAdd();if(!isHome())refresh(goHome)},180000);
@@ -614,7 +631,7 @@ $('grid').addEventListener('click',e=>{
 
 
 // 日付が変わったら描き直す
-setInterval(()=>{const t=today();if(+t!==+T){const home=isHome();T=t;if(home)goHome();render()}},60000);
+setInterval(()=>{applyNight();const t=today();if(+t!==+T){const home=isHome();T=t;if(home)goHome();render()}},60000);
 
 function fit(){
   const bar=$('bar'),msg=$('msg'),wrap=$('wrap');
@@ -632,7 +649,7 @@ addEventListener('resize',()=>{if(adding)return;fit();render()}); // 入力中�
 // 10分ごとに表示中の範囲を取り直す
 setInterval(()=>ensure(true),600000);
 $('msg').textContent=MSG;
-fit();render();ensure();
+fit();render();ensure();applyNight();
 }
 </script>
 </body>
