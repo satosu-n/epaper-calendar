@@ -552,6 +552,7 @@ async function submit(){
   }
 }
 function showUndo(text){
+  if(lastAdded)$('uBtn').style.display='';
   clearTimeout(undoTimer);$('uText').textContent=text;$('undo').classList.add('show');
   undoTimer=setTimeout(()=>$('undo').classList.remove('show'),10000);
 }
@@ -586,10 +587,11 @@ $('cGo').addEventListener('click',async()=>{
   touched();const m=doneT;if(!m||sending)return;sending=true;
   try{
     const j=await post({act:'done',id:m.id});
-    if(!j.ok&&j.error!=='already')throw new Error(DONE_ERR[j.error]||'完了にできませんでした');
+    if(!j.ok&&j.error!=='already')throw new Error(DONE_ERR[j.error]||('完了にできませんでした'+(j.msg?'：'+j.msg:'')));
     MEMO_LIVE=MEMO_LIVE.filter(x=>x.id!==m.id);saveCache();closeCfm();render();
     lastAdded={done:m};showUndo(`「${m.t}」を完了にしました`);
-  }catch(err){closeCfm();say(err.message&&!/fetch|network|JSON/i.test(err.message)?err.message:'完了にできませんでした。通信を確かめてください')}
+  }catch(err){closeCfm();lastAdded=null;$('uBtn').style.display='none'; // エラーは下の黒い帯で目立つように出す
+    showUndo(err.message&&!/fetch|network|JSON/i.test(err.message)?err.message:'完了にできませんでした。通信を確かめてください')}
   sending=false;
 });
 

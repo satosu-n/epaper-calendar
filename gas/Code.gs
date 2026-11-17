@@ -97,8 +97,14 @@ function doPost(e) {
     recordFailure_(props);
     return json_({ error: 'forbidden' });
   }
-  if (p.act === 'done') return json_(doneTask_(props, p));
-  if (p.act === 'undone') return json_(undoneTask_(props, p));
+  if (p.act === 'done' || p.act === 'undone') {
+    try {
+      return json_(p.act === 'done' ? doneTask_(props, p) : undoneTask_(props, p));
+    } catch (err) {
+      console.error('メモの完了でエラー: ' + err); // 「実行数」の詳細に出る
+      return json_({ error: 'server', msg: String(err && err.message || err).slice(0, 200) });
+    }
+  }
   const calId = (props.getProperty('ADD_CALENDAR_ID') || '').trim();
   const cal = calId ? CalendarApp.getCalendarById(calId) : null;
   if (!cal) return json_({ error: 'add disabled' });
