@@ -85,6 +85,7 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .memo li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .memo li b{margin-left:8px;font-size:23px}
 .memo li.more{font-weight:800}
+.memo li.f{color:#999}
 #bar{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding-top:8px}
 #bar button{font:inherit;font-size:19px;font-weight:700;height:56px;border:2px solid #000;border-radius:10px;background:#e8e8e8;color:#000;-webkit-tap-highlight-color:transparent}
 #bar button:active{background:#000;color:#fff}
@@ -264,6 +265,7 @@ function indexEvents(){
 let ADD_OK=false; // Apps Script 側で ADD_CALENDAR_ID が設定されていれば true
 function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE,m:MEMO_LIVE,add:ADD_OK})}
 // メモ欄：Google ToDoの未完了タスクのうち、表示中の月に期限があるものだけ（翌月には繰り越さない）
+// f:1 は毎年のメモの「予定」（去年の記録から。その日が来て本物が出るまで薄い字で出す）
 let MEMO_LIVE=null;
 const memoMax=()=>mode==='w1'?16:mode==='mL'?12:8; // 2列×8行（1週＋詳細）／2列×6行（月（大））／2列×4行
 function renderMemo(y,mo){
@@ -274,7 +276,7 @@ function renderMemo(y,mo){
   let list=items,more='';
   const MEMO_MAX=memoMax();
   if(list.length>MEMO_MAX){list=list.slice(0,MEMO_MAX-1);more=`<li class="more">ほか${items.length-list.length}件</li>`}
-  $('memo').innerHTML=list.map(m=>`<li>・${esc(m.t)}</li>`).join('')+more
+  $('memo').innerHTML=list.map(m=>`<li${m.f?' class="f"':''}>・${esc(m.t)}</li>`).join('')+more
     +(items.length?'':'<li style="color:#777">メモはありません</li>');
 }
 const HOL_LIVE={};

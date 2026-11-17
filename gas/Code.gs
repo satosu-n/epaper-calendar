@@ -145,27 +145,46 @@ function minutes_(s) {
 }
 
 // メモ欄：Google ToDoの未完了タスクのうち、期限が取得できる期間（minS〜maxS）に入るもの。月ごとの絞り込みは画面側で行う
+// メモ欄：期限つきの未完了タスク＋毎年のメモの「予定」（f:1）
+//  ・Googleの繰り返しタスクは、先の回をAPIで読めない（その日になると、去年の日付の記録が今年の日付に進む）
+//  ・そこで、過去1年のうち期限が1日のタスク（完了済みも含む）を、1年後の同じ日の「予定」として返す
+//  ・返すのは今日より先の日の分だけ。同じ日・同じ題名の本物があれば本物だけ
 function memo_(props, minS, maxS) {
   if (typeof Tasks === 'undefined') return null; // Tasks API が未追加
   try {
     let ids = (props.getProperty('TASKLIST_IDS') || '').split(',').map(s => s.trim()).filter(Boolean);
     if (!ids.length) ids = (Tasks.Tasklists.list({ maxResults: 100 }).items || []).map(l => l.id);
-    const out = [];
+    const todayS = fmt_(new Date(), 'yyyy-MM-dd');
+    const yearAgo = new Date(parse_(todayS).getTime() - 366 * 864e5);
+    const out = [], fc = [], real = {};
     ids.forEach(id => {
       let pageToken;
       do {
-        const r = Tasks.Tasks.list(id, { showCompleted: false, showHidden: false, maxResults: 100, pageToken: pageToken });
+        const r = Tasks.Tasks.list(id, { showCompleted: true, showHidden: true, dueMin: yearAgo.toISOString(), maxResults: 100, pageToken: pageToken });
         (r.items || []).forEach(t => {
           const due = t.due ? t.due.slice(0, 10) : '';
           if (!t.title || !due) return;               // 期限なしは表示しない
+          real[due + '|' + t.title] = true;
+          if (due.slice(8) === '01') {                // 毎年のメモ（1日が期限）の1年後の予定
+            const f = (+due.slice(0, 4) + 1) + due.slice(4);
+            if (f > todayS && (!minS || (f >= minS && f <= maxS))) fc.push({ t: t.title, due: f, p: t.position || '', f: 1 });
+          }
+          if (t.status === 'completed') return;       // 完了済みは予定の材料にだけ使う
           if (minS && (due < minS || due > maxS)) return; // 期間外（昔の未完了など）は送らない
           out.push({ t: t.title, due: due, p: t.position || '' });
         });
         pageToken = r.nextPageToken;
       } while (pageToken);
     });
-    out.sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : (a.p < b.p ? -1 : 1));
-    return out.slice(0, 500).map(x => ({ t: x.t, due: x.due }));
+    const seen = {};
+    fc.forEach(x => {
+      const k = x.due + '|' + x.t;
+      if (real[k] || seen[k]) return;
+      seen[k] = true;
+      out.push(x);
+    });
+    out.sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : (a.f || 0) - (b.f || 0) || (a.p < b.p ? -1 : 1));
+    return out.slice(0, 500).map(x => x.f ? { t: x.t, due: x.due, f: 1 } : { t: x.t, due: x.due });
   } catch (err) {
     console.error('ToDoを読めませんでした: ' + err);
     return null;
@@ -256,7 +275,7 @@ function setup() {
   const addCal = addId ? CalendarApp.getCalendarById(addId) : null;
   Logger.log('予定を追加するカレンダー: ' + (addCal ? addCal.getName() : addId ? '（IDが見つかりません）' : '（未設定：追加は使えません）'));
   const m = memo_(props, '', '');
-  Logger.log(m === null ? 'メモ欄：Tasks API が追加されていないか、読めませんでした' : 'メモ欄：期限つきの未完了タスク ' + m.length + ' 件');
+  Logger.log(m === null ? 'メモ欄：Tasks API が追加されていないか、読めませんでした' : 'メモ欄：期限つきの未完了タスク ' + m.filter(x => !x.f).length + ' 件、毎年のメモの予定 ' + m.filter(x => x.f).length + ' 件');
   Logger.log('iPad用URL: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
 }
 
