@@ -551,10 +551,10 @@ async function submit(){
     $('aErr').textContent=err.message&&!/fetch|network|JSON/i.test(err.message)?err.message:'登録できませんでした。通信を確かめてください';
   }
 }
-function showUndo(text){
+function showUndo(text,ms=10000){ // 予定の登録は10秒、メモの完了は5秒
   if(lastAdded)$('uBtn').style.display='';
   clearTimeout(undoTimer);$('uText').textContent=text;$('undo').classList.add('show');
-  undoTimer=setTimeout(()=>$('undo').classList.remove('show'),10000);
+  undoTimer=setTimeout(()=>$('undo').classList.remove('show'),ms);
 }
 $('uBtn').addEventListener('click',async()=>{
   touched();clearTimeout(undoTimer);$('undo').classList.remove('show');
@@ -589,7 +589,7 @@ $('cGo').addEventListener('click',async()=>{
     const j=await post({act:'done',id:m.id});
     if(!j.ok&&j.error!=='already')throw new Error(DONE_ERR[j.error]||('完了にできませんでした'+(j.msg?'：'+j.msg:'')));
     MEMO_LIVE=MEMO_LIVE.filter(x=>x.id!==m.id);saveCache();closeCfm();render();
-    lastAdded={done:m};showUndo(`「${m.t}」を完了にしました`);
+    lastAdded={done:m};showUndo(`「${m.t}」を完了にしました`,5000);
   }catch(err){closeCfm();lastAdded=null;$('uBtn').style.display='none'; // エラーは下の黒い帯で目立つように出す
     showUndo(err.message&&!/fetch|network|JSON/i.test(err.message)?err.message:'完了にできませんでした。通信を確かめてください')}
   sending=false;
