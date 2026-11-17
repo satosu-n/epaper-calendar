@@ -15,6 +15,11 @@
  *  ・壁から登録した予定には見えない目印（タグ epc=wall）を付ける。「取り消す」で消せるのは、
  *    この目印があり、登録から2分以内の予定だけ（既存の予定は消せない）
  *
+ * メモの完了（壁のメモ欄をタップ →「完了にする」）の安全のための制限
+ *  ・できるのは「完了にする」と、壁から完了にした直後（2分以内）の「未完了に戻す」だけ（削除・変更・作成はしない）
+ *  ・完了にできるのは、メモ欄に出す範囲（TASKLIST_IDS のリスト、期限が取得期間内、未完了）のタスクだけ
+ *  ・壁から完了にできるのは1日30件まで
+ *
  * 事前に、エディタ左の「サービス」の＋から「Tasks API」を追加しておくこと（メモ欄用）
  *
  * 初回
@@ -39,6 +44,7 @@ const ALERT_INTERVAL_MIN = 60; // 不審なアクセスのメール通知は、�
 const ADD_MAX_PER_DAY = 20;    // 壁から追加できる予定は1日にこの件数まで
 const UNDO_MINUTES = 2;        // 「取り消す」で消せるのは、登録からこの分数以内の予定だけ
 const TITLE_MAX = 60;          // 予定名の最大文字数
+const DONE_MAX_PER_DAY = 30;   // 壁からメモを完了にできるのは1日にこの件数まで
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
@@ -91,6 +97,8 @@ function doPost(e) {
     recordFailure_(props);
     return json_({ error: 'forbidden' });
   }
+  if (p.act === 'done') return json_(doneTask_(props, p));
+  if (p.act === 'undone') return json_(undoneTask_(props, p));
   const calId = (props.getProperty('ADD_CALENDAR_ID') || '').trim();
   const cal = calId ? CalendarApp.getCalendarById(calId) : null;
   if (!cal) return json_({ error: 'add disabled' });
@@ -138,6 +146,56 @@ function undoEvent_(cal, p) {
   return { ok: true };
 }
 
+// ---- メモの完了・取り消し（壁のメモ欄から） ----
+// 本文（JSON）：{ k: 合言葉, act: 'done', id: 'リストID:タスクID' } ／ { k: 合言葉, act: 'undone', id: 同じID }
+function taskRef_(props, id) {
+  const m = /^([^:]+):([^:]+)$/.exec(String(id || ''));
+  if (!m) return null;
+  let ids = (props.getProperty('TASKLIST_IDS') || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!ids.length) ids = (Tasks.Tasklists.list({ maxResults: 100 }).items || []).map(l => l.id);
+  if (ids.indexOf(m[1]) < 0) return null;
+  try { return { list: m[1], task: m[2], t: Tasks.Tasks.get(m[1], m[2]) }; } catch (err) { return null; }
+}
+function doneTask_(props, p) {
+  if (typeof Tasks === 'undefined') return { error: 'no tasks' };
+  const r = taskRef_(props, p.id);
+  if (!r || !r.t.due) return { error: 'not found' };
+  if (r.t.status === 'completed') return { error: 'already' };
+  const due = r.t.due.slice(0, 10);
+  const today = parse_(fmt_(new Date(), 'yyyy-MM-dd'));
+  const minS = fmt_(new Date(today.getTime() - PAST_DAYS * 864e5), 'yyyy-MM-dd');
+  const maxS = fmt_(new Date(today.getTime() + FUTURE_DAYS * 864e5), 'yyyy-MM-dd');
+  if (due < minS || due > maxS) return { error: 'not found' };
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { error: 'busy' };
+  try {
+    const todayS = fmt_(new Date(), 'yyyy-MM-dd');
+    const log = JSON.parse(props.getProperty('DONE_LOG') || '{}');
+    const n = log.d === todayS ? log.n : 0;
+    if (n >= DONE_MAX_PER_DAY) return { error: 'limit' };
+    Tasks.Tasks.patch({ status: 'completed' }, r.list, r.task);
+    props.setProperty('DONE_LOG', JSON.stringify({ d: todayS, n: n + 1 }));
+    props.setProperty('DONE_LAST', JSON.stringify({ id: String(p.id), at: Date.now() })); // 取り消し用（直近の1件だけ）
+    return { ok: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+// 未完了に戻す：壁から完了にした直近の1件で、UNDO_MINUTES 分以内のものだけ
+function undoneTask_(props, p) {
+  if (typeof Tasks === 'undefined') return { error: 'no tasks' };
+  const last = JSON.parse(props.getProperty('DONE_LAST') || '{}');
+  if (!last.id || last.id !== String(p.id) || Date.now() - last.at > UNDO_MINUTES * 60000) return { error: 'too old' };
+  const r = taskRef_(props, p.id);
+  if (!r) return { error: 'not found' };
+  const t = r.t;
+  t.status = 'needsAction';
+  delete t.completed;
+  Tasks.Tasks.update(t, r.list, r.task); // 丸ごと書き戻して、完了日時を消す
+  props.deleteProperty('DONE_LAST');
+  return { ok: true };
+}
+
 function minutes_(s) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(s || '');
   if (!m || +m[1] > 23 || +m[2] > 59) return null;
@@ -171,7 +229,7 @@ function memo_(props, minS, maxS) {
           }
           if (t.status === 'completed') return;       // 完了済みは予定の材料にだけ使う
           if (minS && (due < minS || due > maxS)) return; // 期間外（昔の未完了など）は送らない
-          out.push({ t: t.title, due: due, p: t.position || '' });
+          out.push({ t: t.title, due: due, p: t.position || '', id: id + ':' + t.id });
         });
         pageToken = r.nextPageToken;
       } while (pageToken);
@@ -184,7 +242,7 @@ function memo_(props, minS, maxS) {
       out.push(x);
     });
     out.sort((a, b) => a.due < b.due ? -1 : a.due > b.due ? 1 : (a.f || 0) - (b.f || 0) || (a.p < b.p ? -1 : 1));
-    return out.slice(0, 500).map(x => x.f ? { t: x.t, due: x.due, f: 1 } : { t: x.t, due: x.due });
+    return out.slice(0, 500).map(x => x.f ? { t: x.t, due: x.due, f: 1 } : { t: x.t, due: x.due, id: x.id });
   } catch (err) {
     console.error('ToDoを読めませんでした: ' + err);
     return null;

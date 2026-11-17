@@ -137,9 +137,14 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .aerr{font-size:38px;font-weight:800;color:#d0262d;min-height:46px}
 /* 登録したあとの「取り消す」 */
 .undo{position:absolute;left:44px;right:44px;bottom:44px;height:130px;background:#000;color:#fff;border-radius:18px;padding-left:36px;display:none;align-items:center;gap:24px;font-size:42px;font-weight:700;z-index:6}
-.undo.show{display:flex}
+.undo.show,.cfm.show{display:flex}
+/* メモを完了にする前の確認 */
+.cfm{position:absolute;left:44px;right:44px;bottom:44px;min-height:130px;background:#fff;color:#000;border:6px solid #000;border-radius:18px;padding:16px 16px 16px 36px;display:none;align-items:center;gap:20px;font-size:42px;font-weight:700;z-index:7}
+.cfm span{flex:1;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.cfm button.go{background:#000;color:#fff}
+.memo li[data-i]{cursor:pointer}
 .undo span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.undo button{flex:none;font:inherit;font-size:42px;font-weight:800;height:130px;padding:0 48px;background:#fff;color:#000;border:4px solid #000;border-radius:18px}
+.undo button,.cfm button{flex:none;font:inherit;font-size:42px;font-weight:800;height:130px;padding:0 48px;background:#fff;color:#000;border:4px solid #000;border-radius:18px}
 /* 夜の画面：白黒を反転して暗くする（色は色相を戻して残す）。周りも真っ黒に */
 body.night{background:#000}
 body.night #wrap,body.night #bar{filter:invert(1) hue-rotate(180deg) brightness(.5)}
@@ -190,6 +195,7 @@ body.color .dh.sat .dn{border-bottom:none;border-radius:6px;color:var(--blue)}
       <div class="aerr" id="aErr"></div>
     </div>
     <div class="undo" id="undo"><span id="uText"></span><button id="uBtn">取り消す</button></div>
+    <div class="cfm" id="cfm"><span id="cText"></span><button id="cNo">やめる</button><button class="go" id="cGo">完了にする</button></div>
     <div class="memo"><h4>メモ</h4><ul id="memo">
       <li>・上履きを持ち帰る（金）</li><li>・町内会費 1,000円 集金あり</li>
       <li>・年賀状の準備</li><li>・冬休みの宿題プリントを確認</li>
@@ -266,7 +272,7 @@ let ADD_OK=false; // Apps Script 側で ADD_CALENDAR_ID が設定されていれ
 function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE,m:MEMO_LIVE,add:ADD_OK})}
 // メモ欄：Google ToDoの未完了タスクのうち、表示中の月に期限があるものだけ（翌月には繰り越さない）
 // f:1 は毎年のメモの「予定」（去年の記録から。その日が来て本物が出るまで薄い字で出す）
-let MEMO_LIVE=null;
+let MEMO_LIVE=null,MEMO_SHOWN=[];
 const memoMax=()=>mode==='w1'?16:mode==='mL'?12:8; // 2列×8行（1週＋詳細）／2列×6行（月（大））／2列×4行
 function renderMemo(y,mo){
   if(!MEMO_LIVE)return;
@@ -276,7 +282,8 @@ function renderMemo(y,mo){
   let list=items,more='';
   const MEMO_MAX=memoMax();
   if(list.length>MEMO_MAX){list=list.slice(0,MEMO_MAX-1);more=`<li class="more">ほか${items.length-list.length}件</li>`}
-  $('memo').innerHTML=list.map(m=>`<li${m.f?' class="f"':''}>・${esc(m.t)}</li>`).join('')+more
+  MEMO_SHOWN=list;
+  $('memo').innerHTML=list.map((m,i)=>`<li${m.f?' class="f"':m.id?` data-i="${i}"`:''}>・${esc(m.t)}</li>`).join('')+more
     +(items.length?'':'<li style="color:#777">メモはありません</li>');
 }
 const HOL_LIVE={};
@@ -551,12 +558,39 @@ function showUndo(text){
 $('uBtn').addEventListener('click',async()=>{
   touched();clearTimeout(undoTimer);$('undo').classList.remove('show');
   const x=lastAdded;lastAdded=null;if(!x)return;
+  if(x.done){
+    try{const j=await post({act:'undone',id:x.done.id});if(!j.ok)throw 0;
+      MEMO_LIVE.push(x.done);MEMO_LIVE.sort((a,b)=>a.due<b.due?-1:a.due>b.due?1:0);saveCache();render();say('未完了に戻しました')}
+    catch(e){say('戻せませんでした。ToDoアプリの「完了済み」から戻してください')}
+    return}
   if(x.sample){const a=SINGLE[x.k]||[];const i=a.findIndex(e=>e.title===x.t);if(i>=0)a.splice(i,1);render();say('取り消しました');return}
   try{
     const j=await post({act:'undo',id:x.id});
     if(!j.ok)throw 0;
     EVS.delete(x.k);indexEvents();saveCache();render();say('取り消しました');
   }catch(e){say('取り消せませんでした。スマホのカレンダーから消してください')}
+});
+
+// ---- メモをタップして完了にする（確認をはさむ。グレーの予定は対象外） ----
+let doneT=null;
+const DONE_ERR={'limit':'今日はこれ以上完了にできません（1日30件まで）','already':'もう完了になっています',
+  'not found':'このメモは見つかりませんでした','busy':'混み合っています。もう一度押してください','forbidden':'接続の設定を確かめてください'};
+function closeCfm(){doneT=null;$('cfm').classList.remove('show')}
+$('memo').addEventListener('click',e=>{
+  const li=e.target.closest('li[data-i]');if(!li||adding)return;touched();
+  const m=MEMO_SHOWN[+li.dataset.i];if(!m||!m.id)return;
+  doneT=m;$('cText').textContent=`「${m.t}」を完了にしますか？`;$('cfm').classList.add('show');
+});
+$('cNo').addEventListener('click',()=>{touched();closeCfm()});
+$('cGo').addEventListener('click',async()=>{
+  touched();const m=doneT;if(!m||sending)return;sending=true;
+  try{
+    const j=await post({act:'done',id:m.id});
+    if(!j.ok&&j.error!=='already')throw new Error(DONE_ERR[j.error]||'完了にできませんでした');
+    MEMO_LIVE=MEMO_LIVE.filter(x=>x.id!==m.id);saveCache();closeCfm();render();
+    lastAdded={done:m};showUndo(`「${m.t}」を完了にしました`);
+  }catch(err){closeCfm();say(err.message&&!/fetch|network|JSON/i.test(err.message)?err.message:'完了にできませんでした。通信を確かめてください')}
+  sending=false;
 });
 
 // 画面の切り替え。eink=1 のときは電子ペーパーの書き換えを再現：黒→白→新しい画面（合計約0.65秒）
@@ -580,7 +614,7 @@ function touched(){
   wakeUntil=Date.now()+180000;applyNight();
   clearTimeout(idle);
   // 3分操作がなければ今日に戻る（表示の種類はそのまま）
-  idle=setTimeout(()=>{T=today();if(adding)closeAdd();if(!isHome())refresh(goHome)},180000);
+  idle=setTimeout(()=>{T=today();if(adding)closeAdd();closeCfm();if(!isHome())refresh(goHome)},180000);
 }
 function say(t){
   clearTimeout(msgTimer);$('msg').textContent=t;
