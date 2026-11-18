@@ -9,7 +9,7 @@
  *   ADD_CALENDAR_ID … 壁から予定を追加するカレンダーのID（家族の共有カレンダー）。空なら追加は使えない
  *   GEMINI_API_KEY … 話して予定を登録（読み取り）に使う Gemini API のキー。空なら「話して入れる」は出ない
  *   VOICE          … off にすると「話して入れる」を止める（キーは残したまま）
- *   GEMINI_MODEL   … 使うモデル。空なら gemini-2.5-flash-lite
+ *   GEMINI_MODEL   … 使うモデル。空なら gemini-3.5-flash-lite
  *
  * 話して予定を登録（入力画面の「話して入れる」）
  *  ・話した文を Gemini に送り、日付・時刻・予定名を読み取って入力画面に入れるだけ（登録は人が「登録する」を押す）
@@ -59,7 +59,7 @@ const DONE_MAX_PER_DAY = 30;   // 壁からメモを完了にできるのは1日
 const PARSE_MAX_PER_DAY = 60;  // 話して入れる（読み取り）は1日にこの件数まで
 const VOICE_TEXT_MAX = 200;    // 読み取りに送る文の最大文字数
 const NAMES_MAX = 30;          // AIに渡す「よく使う予定名」の件数
-const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite'; // 考える機能は初期設定で最小（速さ優先）
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
@@ -308,8 +308,9 @@ function parseText_(props, p) {
     '- 予定として読めないときは ok を false にし、ほかは空にする。'
   ].join('\n');
   const model = (props.getProperty('GEMINI_MODEL') || '').trim() || DEFAULT_MODEL;
-  const gen = { temperature: 0, maxOutputTokens: 256, responseMimeType: 'application/json', responseSchema: PARSE_SCHEMA };
-  if (/^gemini-2\.5/.test(model)) gen.thinkingConfig = { thinkingBudget: 0 }; // 考える機能は使わない（速さ優先）
+  const gen = { maxOutputTokens: 256, responseMimeType: 'application/json', responseSchema: PARSE_SCHEMA };
+  if (/^gemini-2\./.test(model)) { gen.temperature = 0; gen.thinkingConfig = { thinkingBudget: 0 }; } // 古いモデルのとき
+  // Gemini 3 以降は温度を初期値のままにする（下げると答えが崩れることがあるため）
   const t1 = Date.now();
   const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
     method: 'post', contentType: 'application/json', muteHttpExceptions: true,
