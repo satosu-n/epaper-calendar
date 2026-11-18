@@ -269,11 +269,11 @@ function voiceCtx_(props) {
 const PARSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    ok: { type: 'BOOLEAN' }, date: { type: 'STRING' }, allDay: { type: 'BOOLEAN' },
+    ok: { type: 'BOOLEAN' }, dateSaid: { type: 'BOOLEAN' }, date: { type: 'STRING' }, allDay: { type: 'BOOLEAN' },
     start: { type: 'STRING' }, end: { type: 'STRING' }, title: { type: 'STRING' }
   },
-  required: ['ok', 'date', 'allDay', 'start', 'end', 'title'],
-  propertyOrdering: ['ok', 'date', 'allDay', 'start', 'end', 'title']
+  required: ['ok', 'dateSaid', 'date', 'allDay', 'start', 'end', 'title'],
+  propertyOrdering: ['ok', 'dateSaid', 'date', 'allDay', 'start', 'end', 'title']
 };
 
 function parseText_(props, p) {
@@ -294,19 +294,18 @@ function parseText_(props, p) {
     lock.releaseLock();
   }
   const ctx = voiceCtx_(props);
-  const W = '日月火水木金土';
-  // 選んでいる日（日付を言わなかったときに使う）。今日〜1年先の範囲でなければ今日
+  // 選んでいる日（日付を言わなかったときに、AIの答えの日付をこれに置き換える。AIには渡さない）。今日〜1年先でなければ使わない
   const bd = parse_(p.base), td = parse_(todayS);
-  const baseS = bd && bd >= td && bd <= new Date(td.getTime() + FUTURE_DAYS * 864e5) ? p.base : todayS;
+  const baseS = bd && bd >= td && bd <= new Date(td.getTime() + FUTURE_DAYS * 864e5) ? p.base : '';
   const sys = [
     'あなたは家族のカレンダーへの予定の登録を手伝う。話し言葉の文から予定を1件読み取り、決まった形のJSONだけを返す。',
-    '今日：' + todayS + '（' + W.charAt(+fmt_(now, 'u') % 7) + '）　今の時刻：' + fmt_(now, 'H:mm'),
-    '選んでいる日：' + baseS + '（' + W.charAt(+fmt_(parse_(baseS), 'u') % 7) + '）',
+    '今日：' + todayS + '（' + '日月火水木金土'.charAt(+fmt_(now, 'u') % 7) + '）　今の時刻：' + fmt_(now, 'H:mm'),
     '週は日曜から土曜まで。',
     '祝日：' + (ctx.h.join('、') || 'なし'),
     'よく使う予定名：' + (ctx.names.join('、') || 'なし'),
     '決まり：',
-    '- date は YYYY-MM-DD。日付の言葉（あした、来週の○曜、○日など）がなければ、選んでいる日にする。日付の言葉があれば、選んでいる日ではなく今日を基準に読む。「○曜」「今度の○曜」だけなら、今日より後で一番近いその曜日。「来週の○曜」は、次の日曜から始まる週のその曜日。「○日」だけで今月のその日が過ぎていれば来月。今日より前の日付にはしない。',
+    '- dateSaid は、文に日付の言葉（今日、あした、来週の○曜、○日、○月○日など）があれば true、なければ false。',
+    '- date は YYYY-MM-DD で、今日を基準に読む。日付の言葉がなければ今日。「○曜」「今度の○曜」だけなら、今日より後で一番近いその曜日。「来週の○曜」は、次の日曜から始まる週のその曜日。「○日」だけで今月のその日が過ぎていれば来月。今日より前の日付にはしない。',
     '- start・end は24時間制の H:mm。「午前」「朝」がなく1〜6時と言ったときは午後（13〜18時）とみなす。「半」は30分。',
     '- 終わりの時刻を言っていなければ end は空文字。時刻を言っていなければ allDay を true にし、start・end は空文字。',
     '- title は予定の中身だけを短く（日付・時刻・「から」「まで」などは入れない）。よく使う予定名と同じ予定なら、その書き方に合わせる。音声入力の聞き間違いらしいときは、よく使う予定名に直してよい。',
@@ -336,6 +335,7 @@ function parseText_(props, p) {
   } catch (err) {
     return { error: 'unknown', aiMs: aiMs };
   }
+  if (r && r.ok === true && r.dateSaid === false && baseS) r.date = baseS; // 日付を言わなかったときは、選んでいる日
   const out = checkParsed_(r, todayS);
   out.aiMs = aiMs;
   out.ms = Date.now() - t0;
