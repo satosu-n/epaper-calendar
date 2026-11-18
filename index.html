@@ -134,6 +134,13 @@ header{height:300px;flex:none;display:flex;justify-content:space-between;align-i
 .tb button{font:inherit;font-size:48px;font-weight:700;height:140px;border:3px solid #000;border-radius:14px;background:#fff;color:#000;-webkit-tap-highlight-color:transparent}
 .tb button.on{background:#000;color:#fff}
 .tb button:disabled{opacity:.2}
+/* 話して入れる：キーボードのマイクで話した文をAIが読み取り、下の欄に入れる */
+.voice{display:none;gap:20px;height:120px}
+#paper.voiceon .voice{display:flex}
+#aSay{flex:1;font:inherit;font-size:44px;border:4px dashed #000;border-radius:16px;padding:0 28px;color:#000;background:#fff;-webkit-user-select:text;user-select:text;outline:none}
+#aRead{flex:none;width:280px;font:inherit;font-size:44px;font-weight:800;border:none;border-radius:16px;background:#000;color:#fff;-webkit-tap-highlight-color:transparent}
+#aRead:disabled{opacity:.4}
+.vst{margin-left:auto;font-size:30px;font-weight:700;color:#555;white-space:nowrap}
 .aerr{font-size:38px;font-weight:800;color:#d0262d;min-height:46px}
 /* 登録したあとの「取り消す」 */
 .undo{position:absolute;left:44px;right:44px;bottom:44px;height:130px;background:#000;color:#fff;border-radius:18px;padding-left:36px;display:none;align-items:center;gap:24px;font-size:42px;font-weight:700;z-index:6}
@@ -175,7 +182,8 @@ body.color .dh.sat .dn{border-bottom:none;border-radius:6px;color:var(--blue)}
     <div class="wd"><div class="sun"><span>日</span></div><div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div class="sat"><span>土</span></div></div>
     <div id="grid"></div>
     <div class="add" id="add">
-      <div class="ah"><span class="al">予定を追加</span><span id="aDate"></span></div>
+      <div class="ah"><span class="al">予定を追加</span><span id="aDate"></span><span class="vst" id="aVst"></span></div>
+      <div class="voice"><input id="aSay" type="text" maxlength="200" placeholder="話して入れる（キーボードのマイクで話す）" autocomplete="off" enterkeyhint="go"><button id="aRead">読み取る</button></div>
       <input id="aTitle" type="text" maxlength="60" placeholder="予定名（例：歯医者）" autocomplete="off" enterkeyhint="done">
       <div class="when">
         <div class="seg" id="aKind"><button data-v="t">時間を決める</button><button data-v="a">終日</button></div>
@@ -269,7 +277,8 @@ function indexEvents(){
   });
 }
 let ADD_OK=false; // Apps Script 側で ADD_CALENDAR_ID が設定されていれば true
-function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE,m:MEMO_LIVE,add:ADD_OK})}
+let VOICE_OK=false; // Apps Script 側で GEMINI_API_KEY が設定されていれば true（話して入れる）
+function saveCache(){store.set('epc-cache',{ev:[...EVS.values()],h:HOL_LIVE,m:MEMO_LIVE,add:ADD_OK,voice:VOICE_OK})}
 // メモ欄：Google ToDoの未完了タスクのうち、表示中の月に期限があるものだけ（翌月には繰り越さない）
 // f:1 は毎年のメモの「予定」（去年の記録から。その日が来て本物が出るまで薄い字で出す）
 let MEMO_LIVE=null,MEMO_SHOWN=[];
@@ -296,7 +305,7 @@ async function fetchRange(a,b){
   j.ev.forEach(ev=>EVS.set(ev.k,ev));
   Object.assign(HOL,j.h);Object.assign(HOL_LIVE,j.h);
   if(j.m)MEMO_LIVE=j.m;
-  ADD_OK=!!j.add;
+  ADD_OK=!!j.add;VOICE_OK=!!j.voice;
   for(let m=new Date(a.getFullYear(),a.getMonth(),1);m<=b;m=new Date(m.getFullYear(),m.getMonth()+1,1))loaded.add(monthKey(m));
   saveCache();
   return j;
@@ -341,7 +350,7 @@ addE(T,'17:00','買い物当番');addE(addD(T,1),'7:30','朝練（次郎）');ad
 }
 if(cfg){
   const c=store.get('epc-cache');
-  if(c){(c.ev||[]).forEach(ev=>EVS.set(ev.k,ev));Object.assign(HOL,c.h||{});Object.assign(HOL_LIVE,c.h||{});if(c.m)MEMO_LIVE=c.m;ADD_OK=!!c.add}
+  if(c){(c.ev||[]).forEach(ev=>EVS.set(ev.k,ev));Object.assign(HOL,c.h||{});Object.assign(HOL_LIVE,c.h||{});if(c.m)MEMO_LIVE=c.m;ADD_OK=!!c.add;VOICE_OK=!!c.voice}
   indexEvents();MSG='Googleカレンダーから読み込み中…';
 }else sample();
 
@@ -475,6 +484,7 @@ function render(){
 }
 // 予定の追加が使えるか：接続先がない（サンプル）ときは試せるようにする
 const canAdd=()=>!cfg||ADD_OK;
+const canVoice=()=>!cfg||VOICE_OK; // サンプルでは画面の中だけで試せる（AIには送らない）
 
 // ---- 予定の追加 ----
 let adding=false,sending=false,A=null,lastAdded=null,undoTimer=null;
@@ -484,9 +494,11 @@ const fmtm=x=>Math.floor(x/60)+':'+pad(x%60);
 const endOf=()=>A.e!==null?A.e:Math.min(A.s+60,1440);
 function openAdd(){
   adding=true;A={d:sel,allDay:false,s:null,e:null,act:'s'};
-  $('aTitle').value='';$('aErr').textContent='';
+  $('aTitle').value='';$('aErr').textContent='';$('aSay').value='';$('aVst').textContent='';
+  $('paper').classList.toggle('voiceon',canVoice());
   render();renderAdd();
-  $('aTitle').focus(); // タップの処理の中で呼ぶと、iPadでキーボードが出る
+  $(canVoice()?'aSay':'aTitle').focus(); // タップの処理の中で呼ぶと、iPadでキーボードが出る
+  if(cfg&&VOICE_OK)post({act:'ping'}).catch(()=>{}); // 話しているあいだにApps Scriptを起こしておく
 }
 function closeAdd(){
   adding=false;sending=false;$('aTitle').blur();
@@ -521,6 +533,40 @@ pick('aM',v=>{const m=+v;
   if(A.act==='s'){A.s=A.s-A.s%60+m;if(A.e!==null&&A.e<=A.s)A.e=null;A.act='e'} // はじまりが決まったら、おわりを選ぶ番にする
   else{const e=endOf();A.e=e-e%60+m;if(A.e<=A.s){A.e=null;$('aErr').textContent='おわりは、はじまりより後にしてください'}}});
 $('aTitle').addEventListener('input',()=>touched());
+// ---- 話して入れる：文をApps Script経由でAIに読み取らせ、入力画面に入れる（登録は人が「登録する」を押す） ----
+let reading=false;
+const PARSE_ERR={'unknown':'うまく読み取れませんでした。言い方を変えるか、下で入れてください',
+  'bad date':'今日より前か、1年より先の日になりました。日付を言い直してください','quota':'AIの無料枠の上限です。少し待つか、下で入れてください',
+  'limit':'今日はこれ以上読み取れません（1日60件まで）','voice off':'話して入れる機能は止めてあります','too long':'文が長すぎます（200文字まで）',
+  'busy':'混み合っています。もう一度押してください','forbidden':'接続の設定を確かめてください','ai':'AIにつながりませんでした'};
+async function readVoice(){
+  touched();
+  const text=$('aSay').value.trim();
+  if(!text){$('aErr').textContent='マイクで話すか、文を入れてください';return}
+  if(reading)return;
+  reading=true;$('aRead').disabled=true;$('aSay').blur();$('aVst').textContent='読み取り中…';$('aErr').textContent='';
+  const t0=Date.now();
+  try{
+    let r;
+    if(!cfg){await new Promise(f=>setTimeout(f,400));r={ok:true,d:key(addD(T,1)),s:'15:00',e:'',t:text.slice(0,60),sample:true}}
+    else r=await post({act:'parse',text});
+    if(!adding)return;
+    if(!r.ok)throw new Error(PARSE_ERR[r.error]||('読み取れませんでした'+(r.msg?'：'+r.msg:'')));
+    A.d=sel=parseKey(r.d);ws=sunday(sel);
+    A.allDay=!r.s;A.s=r.s?tm(r.s):null;A.e=r.e?tm(r.e):null;A.act='s';
+    if(r.t)$('aTitle').value=r.t;
+    render();renderAdd();
+    const sec=x=>(x/1000).toFixed(1);
+    $('aVst').textContent=r.sample?'サンプル（AIには送っていません）':`読み取りました ${sec(Date.now()-t0)}秒（AI ${sec(r.aiMs)}秒）`;
+    $('aErr').textContent=r.t?'':'予定名を入れてください';
+  }catch(err){
+    $('aVst').textContent='';
+    $('aErr').textContent=err.message&&!/fetch|network|JSON/i.test(err.message)?err.message:'読み取れませんでした。通信を確かめてください';
+  }finally{reading=false;$('aRead').disabled=false}
+}
+$('aRead').addEventListener('click',readVoice);
+$('aSay').addEventListener('input',()=>touched());
+$('aSay').addEventListener('keydown',e=>{if(e.key==='Enter')readVoice()});
 $('aTitle').addEventListener('keydown',e=>{if(e.key==='Enter')$('aTitle').blur()});
 const ADD_ERR={'bad title':'予定名を確かめてください（60文字まで）','bad date':'今日より前や、1年より先の日には登録できません',
   'bad time':'時刻を確かめてください','limit':'今日はこれ以上登録できません（1日20件まで）','add disabled':'予定の追加の設定がされていません',

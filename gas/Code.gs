@@ -7,6 +7,17 @@
  *   TASKLIST_IDS  … メモ欄に出すToDoリストのID。複数ならカンマ区切り。空ならすべてのリスト
  *   ALERT_TO      … 不審なアクセスの通知先メールアドレス。空ならこのスクリプトの持ち主
  *   ADD_CALENDAR_ID … 壁から予定を追加するカレンダーのID（家族の共有カレンダー）。空なら追加は使えない
+ *   GEMINI_API_KEY … 話して予定を登録（読み取り）に使う Gemini API のキー。空なら「話して入れる」は出ない
+ *   VOICE          … off にすると「話して入れる」を止める（キーは残したまま）
+ *   GEMINI_MODEL   … 使うモデル。空なら gemini-2.5-flash-lite
+ *
+ * 話して予定を登録（入力画面の「話して入れる」）
+ *  ・話した文を Gemini に送り、日付・時刻・予定名を読み取って入力画面に入れるだけ（登録は人が「登録する」を押す）
+ *  ・Gemini に送るのは：話した文、今日の日付・曜日・今の時刻、1年先までの祝日、
+ *    よく使う予定名（表示するカレンダーの過去1年で2回以上出てきた予定名、多い順に30件。日付や時刻は送らない）
+ *  ・祝日とよく使う予定名は1日1回作ってスクリプト プロパティ VOICE_CTX に置く
+ *  ・読み取りは1日60件まで、文は200文字まで
+ *  ・初めて使うときは関数「testParse」を実行し、外部サービスへの接続を許可する（作り物の文で試す）
  *
  * 予定の追加（壁の「＋予定を追加」）の安全のための制限
  *  ・書き込めるのは ADD_CALENDAR_ID のカレンダーだけ
@@ -45,6 +56,10 @@ const ADD_MAX_PER_DAY = 20;    // 壁から追加できる予定は1日にこの
 const UNDO_MINUTES = 2;        // 「取り消す」で消せるのは、登録からこの分数以内の予定だけ
 const TITLE_MAX = 60;          // 予定名の最大文字数
 const DONE_MAX_PER_DAY = 30;   // 壁からメモを完了にできるのは1日にこの件数まで
+const PARSE_MAX_PER_DAY = 60;  // 話して入れる（読み取り）は1日にこの件数まで
+const VOICE_TEXT_MAX = 200;    // 読み取りに送る文の最大文字数
+const NAMES_MAX = 30;          // AIに渡す「よく使う予定名」の件数
+const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
@@ -81,13 +96,19 @@ function doGet(e) {
       });
     }
   }
+  const voice = voiceOn_(props);
+  if (voice) { // 祝日・よく使う予定名を1日1回作っておく（読み取りを速くするため）
+    try { voiceCtx_(props); } catch (err) { console.error('読み取り用の材料を作れませんでした: ' + err); }
+  }
   return json_({ ev: ev, h: h, m: memo_(props, minS, maxS), at: fmt_(new Date(), 'H:mm'), w: recentFailures_(props),
-    add: !!(props.getProperty('ADD_CALENDAR_ID') || '').trim() });
+    add: !!(props.getProperty('ADD_CALENDAR_ID') || '').trim(), voice: voice });
 }
 
 // ---- 予定の追加・取り消し（壁の「＋予定を追加」から） ----
 // 本文（JSON）：{ k: 合言葉, act: 'add', d: 'yyyy-MM-dd', t: 予定名, s: 'H:mm'（空なら終日）, e: 'H:mm'（空なら1時間） }
 //              { k: 合言葉, act: 'undo', id: 追加したときに返したID }
+//              { k: 合言葉, act: 'parse', text: 話した文 } … 読み取るだけ（登録はしない）
+//              { k: 合言葉, act: 'ping' } … 入力画面を開いたときの準備運動（何もしない）
 function doPost(e) {
   let p;
   try { p = JSON.parse((e && e.postData && e.postData.contents) || '{}'); } catch (err) { return json_({ error: 'bad request' }); }
@@ -96,6 +117,15 @@ function doPost(e) {
   if (!token || p.k !== token) {
     recordFailure_(props);
     return json_({ error: 'forbidden' });
+  }
+  if (p.act === 'ping') return json_({ ok: true });
+  if (p.act === 'parse') {
+    try {
+      return json_(parseText_(props, p));
+    } catch (err) {
+      console.error('読み取りでエラー: ' + err);
+      return json_({ error: 'server', msg: String(err && err.message || err).slice(0, 200) });
+    }
   }
   if (p.act === 'done' || p.act === 'undone') {
     try {
@@ -201,6 +231,128 @@ function undoneTask_(props, p) {
   props.deleteProperty('DONE_LAST');
   return { ok: true };
 }
+
+// ---- 話して予定を登録（読み取りだけ） ----
+function voiceOn_(props) {
+  return !!(props.getProperty('GEMINI_API_KEY') || '').trim() && (props.getProperty('VOICE') || '').trim() !== 'off';
+}
+
+// AIに渡す材料（1日1回作る）：1年先までの祝日、よく使う予定名（過去1年で2回以上、多い順に NAMES_MAX 件。名前だけ）
+function voiceCtx_(props) {
+  const todayS = fmt_(new Date(), 'yyyy-MM-dd');
+  try {
+    const c = JSON.parse(props.getProperty('VOICE_CTX') || 'null');
+    if (c && c.d === todayS) return c;
+  } catch (err) {}
+  const today = parse_(todayS);
+  const h = [];
+  const hc = CalendarApp.getCalendarById(HOLIDAY_ID);
+  if (hc) {
+    hc.getEvents(today, new Date(today.getTime() + FUTURE_DAYS * 864e5)).forEach(x => {
+      const d = x.getDescription() || '';
+      if (d && !/祝日|休日/.test(d)) return;
+      h.push(fmt_(x.getAllDayStartDate(), 'yyyy-MM-dd') + ' ' + x.getTitle());
+    });
+    h.sort();
+  }
+  const cnt = {};
+  calendars_(props).forEach(c => c.getEvents(new Date(today.getTime() - 366 * 864e5), today).forEach(x => {
+    const t = (x.getTitle() || '').trim();
+    if (t && t.length <= 30) cnt[t] = (cnt[t] || 0) + 1;
+  }));
+  const names = Object.keys(cnt).filter(t => cnt[t] >= 2).sort((a, b) => cnt[b] - cnt[a]).slice(0, NAMES_MAX);
+  const c = { d: todayS, h: h, names: names };
+  props.setProperty('VOICE_CTX', JSON.stringify(c));
+  return c;
+}
+
+const PARSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    ok: { type: 'BOOLEAN' }, date: { type: 'STRING' }, allDay: { type: 'BOOLEAN' },
+    start: { type: 'STRING' }, end: { type: 'STRING' }, title: { type: 'STRING' }
+  },
+  required: ['ok', 'date', 'allDay', 'start', 'end', 'title'],
+  propertyOrdering: ['ok', 'date', 'allDay', 'start', 'end', 'title']
+};
+
+function parseText_(props, p) {
+  const t0 = Date.now();
+  if (!voiceOn_(props)) return { error: 'voice off' };
+  const text = String(p.text || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  if (!text) return { error: 'empty' };
+  if (text.length > VOICE_TEXT_MAX) return { error: 'too long' };
+  const now = new Date(), todayS = fmt_(now, 'yyyy-MM-dd');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return { error: 'busy' };
+  try {
+    const log = JSON.parse(props.getProperty('PARSE_LOG') || '{}');
+    const n = log.d === todayS ? log.n : 0;
+    if (n >= PARSE_MAX_PER_DAY) return { error: 'limit' };
+    props.setProperty('PARSE_LOG', JSON.stringify({ d: todayS, n: n + 1 }));
+  } finally {
+    lock.releaseLock();
+  }
+  const ctx = voiceCtx_(props);
+  const sys = [
+    'あなたは家族のカレンダーへの予定の登録を手伝う。話し言葉の文から予定を1件読み取り、決まった形のJSONだけを返す。',
+    '今日：' + todayS + '（' + '日月火水木金土'.charAt(+fmt_(now, 'u') % 7) + '）　今の時刻：' + fmt_(now, 'H:mm'),
+    '週は日曜から土曜まで。',
+    '祝日：' + (ctx.h.join('、') || 'なし'),
+    'よく使う予定名：' + (ctx.names.join('、') || 'なし'),
+    '決まり：',
+    '- date は YYYY-MM-DD。日付の言葉がなければ今日。「○曜」「今度の○曜」だけなら、今日より後で一番近いその曜日。「来週の○曜」は、次の日曜から始まる週のその曜日。「○日」だけで今月のその日が過ぎていれば来月。今日より前の日付にはしない。',
+    '- start・end は24時間制の H:mm。「午前」「朝」がなく1〜6時と言ったときは午後（13〜18時）とみなす。「半」は30分。',
+    '- 終わりの時刻を言っていなければ end は空文字。時刻を言っていなければ allDay を true にし、start・end は空文字。',
+    '- title は予定の中身だけを短く（日付・時刻・「から」「まで」などは入れない）。よく使う予定名と同じ予定なら、その書き方に合わせる。音声入力の聞き間違いらしいときは、よく使う予定名に直してよい。',
+    '- 予定として読めないときは ok を false にし、ほかは空にする。'
+  ].join('\n');
+  const model = (props.getProperty('GEMINI_MODEL') || '').trim() || DEFAULT_MODEL;
+  const gen = { temperature: 0, maxOutputTokens: 256, responseMimeType: 'application/json', responseSchema: PARSE_SCHEMA };
+  if (/^gemini-2\.5/.test(model)) gen.thinkingConfig = { thinkingBudget: 0 }; // 考える機能は使わない（速さ優先）
+  const t1 = Date.now();
+  const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'x-goog-api-key': props.getProperty('GEMINI_API_KEY').trim() },
+    payload: JSON.stringify({ systemInstruction: { parts: [{ text: sys }] }, contents: [{ role: 'user', parts: [{ text: text }] }], generationConfig: gen })
+  });
+  const aiMs = Date.now() - t1;
+  const code = res.getResponseCode();
+  if (code === 429) return { error: 'quota', aiMs: aiMs };
+  if (code !== 200) {
+    console.error('Gemini のエラー ' + code + ': ' + res.getContentText().slice(0, 300)); // 「実行数」の詳細に出る
+    return { error: 'ai', msg: 'Gemini ' + code, aiMs: aiMs };
+  }
+  let r;
+  try {
+    const j = JSON.parse(res.getContentText());
+    r = JSON.parse(j.candidates[0].content.parts[0].text);
+  } catch (err) {
+    return { error: 'unknown', aiMs: aiMs };
+  }
+  const out = checkParsed_(r, todayS);
+  out.aiMs = aiMs;
+  out.ms = Date.now() - t0;
+  return out;
+}
+
+// AIの答えを確かめて、入力画面に入れる形にする（登録の制限と同じ範囲に収める）
+function checkParsed_(r, todayS) {
+  if (!r || r.ok !== true) return { error: 'unknown' };
+  const day = parse_(r.date), today = parse_(todayS);
+  if (!day) return { error: 'unknown' };
+  if (day < today || day > new Date(today.getTime() + FUTURE_DAYS * 864e5)) return { error: 'bad date', d: r.date };
+  let s = '', e = '';
+  const sm = r.allDay ? null : minutes_(r.start);
+  if (sm !== null) {
+    s = hm_(sm);
+    const em = minutes_(r.end);
+    if (em !== null && em > sm) e = hm_(em);
+  }
+  const t = String(r.title || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, TITLE_MAX);
+  return { ok: true, d: r.date, s: s, e: e, t: t };
+}
+function hm_(m) { return Math.floor(m / 60) + ':' + ('0' + m % 60).slice(-2); }
 
 function minutes_(s) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(s || '');
@@ -329,7 +481,7 @@ function setup() {
     token = Utilities.getUuid().replace(/-/g, '');
     props.setProperty('TOKEN', token);
   }
-  ['CALENDAR_IDS', 'TASKLIST_IDS', 'ALERT_TO', 'ADD_CALENDAR_ID'].forEach(k => { if (props.getProperty(k) === null) props.setProperty(k, ''); });
+  ['CALENDAR_IDS', 'TASKLIST_IDS', 'ALERT_TO', 'ADD_CALENDAR_ID', 'GEMINI_API_KEY'].forEach(k => { if (props.getProperty(k) === null) props.setProperty(k, ''); });
   CalendarApp.getAllCalendars();            // カレンダーの権限の確認用
   MailApp.getRemainingDailyQuota();         // メール送信の権限の確認用
   Logger.log('合言葉: ' + token);
@@ -338,6 +490,8 @@ function setup() {
   const addId = (props.getProperty('ADD_CALENDAR_ID') || '').trim();
   const addCal = addId ? CalendarApp.getCalendarById(addId) : null;
   Logger.log('予定を追加するカレンダー: ' + (addCal ? addCal.getName() : addId ? '（IDが見つかりません）' : '（未設定：追加は使えません）'));
+  Logger.log('話して入れる: ' + (voiceOn_(props) ? '使える（モデル ' + ((props.getProperty('GEMINI_MODEL') || '').trim() || DEFAULT_MODEL) + '）' :
+    (props.getProperty('GEMINI_API_KEY') || '').trim() ? '止めてあります（VOICE=off）' : '（未設定：GEMINI_API_KEY が空）'));
   const m = memo_(props, '', '');
   Logger.log(m === null ? 'メモ欄：Tasks API が追加されていないか、読めませんでした' : 'メモ欄：期限つきの未完了タスク ' + m.filter(x => !x.f).length + ' 件、毎年のメモの予定 ' + m.filter(x => x.f).length + ' 件');
   Logger.log('iPad用URL: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
@@ -350,6 +504,17 @@ function resetToken() {
   props.deleteProperty('FAIL_LOG');
   Logger.log('新しい合言葉: ' + token);
   Logger.log('iPad用URLを作り直してください: https://satosu-n.github.io/epaper-calendar/#d=（デプロイID）&k=' + token);
+}
+
+// 話して入れるのテスト：作り物の文を読み取ってログに出す（初回はここで外部サービスへの接続を許可する）
+function testParse() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('VOICE_CTX'); // 材料を作り直して確かめる
+  ['来週の火曜、3時から歯医者', 'あした終日 地域の清掃', '25日の午前10時半から11時半まで面談'].forEach(s => {
+    Logger.log(s + '  →  ' + JSON.stringify(parseText_(props, { text: s })));
+  });
+  const c = voiceCtx_(props);
+  Logger.log('材料：祝日 ' + c.h.length + ' 件、よく使う予定名 ' + c.names.length + ' 件');
 }
 
 // 通知メールのテスト：実行するとすぐに1通送る
